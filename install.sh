@@ -39,11 +39,13 @@ if [[ -z "$SRC" ]]; then
 fi
 
 if [[ -d "$SRC/.git" && -f "$SRC/package.json" ]]; then
-  if [[ "$SRC" == "$HOME/.devscope/src" ]]; then
+  if [[ -f "$SRC/.devscope-managed" ]]; then
+    # A clone this installer made: fast-forward it to the latest $REF.
     log "Updating source in $SRC ${dim}($REF)${reset}"
     git -C "$SRC" fetch -q --depth 1 origin "$REF"
     git -C "$SRC" checkout -q -B "$REF" FETCH_HEAD
   else
+    # Somebody's own checkout: build it as it is, never reset it.
     log "Building from checkout $SRC"
   fi
 else
@@ -56,6 +58,7 @@ else
       || git clone -q --depth 1 --branch "$REF" "git@github.com:$REPO.git" "$SRC" \
       || die "Could not clone $REPO. For a private repo, log in with 'gh auth login' first."
   fi
+  touch "$SRC/.devscope-managed"
 fi
 
 cd "$SRC"
