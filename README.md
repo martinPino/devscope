@@ -98,3 +98,9 @@ adb reverse tcp:8765 ───────────────────�
 ## Next plugins
 
 The event bus is generic: post any JSON to `/ingest` with a `type` field and add a tab in the UI. Natural next ones are Logcat (`adb logcat` streamed over the same socket), SharedPreferences and a database viewer.
+
+## Preview
+
+<img width="1472" height="1012" alt="image" src="https://github.com/user-attachments/assets/446270ef-8e83-44c1-bac2-bf6da6af0388" />
+<img width="1472" height="1012" alt="image" src="https://github.com/user-attachments/assets/1e3e8465-6707-42f6-bdaa-3189c393ea98" />
+
