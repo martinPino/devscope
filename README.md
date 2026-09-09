@@ -2,6 +2,8 @@
 
 Flipper-style inspector that runs in the browser. Detects Android devices and emulators through `adb` and shows every API call from your app live: method, status, URL, timing, request/response headers and bodies.
 
+No manual wiring needed: DevScope hands you a **copy-paste prompt** that makes your AI coding agent set your repo up for both inspectors — see [Set up your app with one prompt](#set-up-your-app-with-one-prompt).
+
 ## Run
 
 ```bash
@@ -34,9 +36,20 @@ npm run dist           # build DevScope.app + .dmg/.zip into dist/ (macOS)
 Settings live in `~/Library/Application Support/devscope/settings.json` (`autoStart`, `adbPath`, `port`).
 Dev hooks: `DEVSCOPE_PORT=8766` overrides the port for one launch, `DEVSCOPE_AUTOSTART=1` forces a start, `DEVSCOPE_E2E_COPY=1` verifies the Copy-prompt button end to end, `DEVSCOPE_SCREENSHOT=/path.png` (+ `DEVSCOPE_QUIT_AFTER=1`) captures the window for automated checks.
 
-## Hook up your Android app (debug builds only)
+## Set up your app with one prompt
 
-Shortcut: click **Set up app** in the header (or the link in the empty state) to copy a ready-made prompt for your AI coding agent (Claude Code, Cursor, Codex…). It contains the steps below, the Kotlin sources and the gotchas, so the agent wires your repo up for both the Network and the Layout inspector — debug builds only.
+You don't have to integrate DevScope by hand. Click **Set up app** in the header (or the *Set up your app* link shown while DevScope is waiting for traffic), copy the prompt, and paste it into your AI coding agent (Claude Code, Cursor, Codex, …) opened in your Android repo. The agent does the wiring for you:
+
+- adds `DevScopeInterceptor` and `DevScopeLayoutAgent` to the **debug** source set — release builds are untouched;
+- installs them through a tiny `DevScope.install(context, builder)` facade (real in debug, no-op in release) as the last OkHttp interceptor;
+- allows cleartext to `localhost` / `10.0.2.2` in debug via a network security config (or merges into your existing one);
+- builds debug and release and tells you exactly which files it changed.
+
+The prompt is generic (works for any project; set the **Module** field if your client lives outside `app`) and self-contained: the Kotlin sources are embedded, so the agent needs no network access. Untick **Embed the Kotlin sources** to get a shorter prompt that `curl`s them from `http://localhost:8765/android/` instead. Either way the result covers both the **Network** and the **Layout** inspector.
+
+Prefer to do it yourself? The manual steps are below.
+
+## Hook up your Android app (debug builds only)
 
 1. Copy `android/DevScopeInterceptor.kt` into your project.
 2. Add it as the **last** interceptor on your `OkHttpClient` (Retrofit uses this client too):
