@@ -4,6 +4,28 @@ Flipper-style inspector that runs in the browser. Detects Android devices/emulat
 
 No manual wiring needed: DevScope hands you a **copy-paste prompt** that makes your AI coding agent set your repo up for both inspectors — see [Set up your app with one prompt](#set-up-your-app-with-one-prompt).
 
+## Install
+
+**Download the app** — grab the `.dmg` for your Mac from the [Releases page](https://github.com/martinPino/devscope/releases) (`arm64` for Apple Silicon, `x64` for Intel), open it and drag DevScope to Applications. The build is ad-hoc signed, not notarized, so macOS Gatekeeper will complain the first time. Either right-click the app → **Open**, or clear the quarantine flag once:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/DevScope.app
+```
+
+**Or install with one command** — builds the app on your Mac (no Gatekeeper warning; needs Node.js 18+ and git) and installs it into `/Applications`. Run it again to update:
+
+```bash
+# while the repo is private (uses the GitHub CLI you are logged in with)
+gh api repos/martinPino/devscope/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
+```
+
+```bash
+# once the repo is public
+curl -fsSL https://raw.githubusercontent.com/martinPino/devscope/main/install.sh | bash
+```
+
+From a checkout the same installer is `./install.sh` (or `npm run install:app`). Set `DEVSCOPE_DEST` to install somewhere other than `/Applications`.
+
 ## Run
 
 ```bash
@@ -24,7 +46,8 @@ No terminal needed: the desktop app runs the same server as a child process and 
 
 ```bash
 npm run desktop        # run from source
-npm run dist           # build DevScope.app + .dmg/.zip into dist/ (macOS)
+npm run install:app    # build, sign and install DevScope.app into /Applications
+npm run dist           # build .dmg/.zip into dist/ (macOS)
 ```
 
 - **Start server / Stop server** button in the top bar (also ⌘R / ⌘. in the *Server* menu). The server dies with the app, so nothing is left running.
