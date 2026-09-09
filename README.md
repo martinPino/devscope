@@ -1,6 +1,6 @@
 # DevScope
 
-Flipper-style inspector that runs in the browser. Detects Android devices and emulators through `adb` and shows every API call from your app live: method, status, URL, timing, request/response headers and bodies.
+Flipper-style inspector that runs in the browser. Detects Android devices/emulators through `adb` and iOS simulators/iPhones through `xcrun`, and shows every API call from your app live: method, status, URL, timing, request/response headers and bodies — plus the view/composable tree.
 
 No manual wiring needed: DevScope hands you a **copy-paste prompt** that makes your AI coding agent set your repo up for both inspectors — see [Set up your app with one prompt](#set-up-your-app-with-one-prompt).
 
@@ -38,7 +38,7 @@ Dev hooks: `DEVSCOPE_PORT=8766` overrides the port for one launch, `DEVSCOPE_AUT
 
 ## Set up your app with one prompt
 
-You don't have to integrate DevScope by hand. Click **Set up app** in the header (or the *Set up your app* link shown while DevScope is waiting for traffic), copy the prompt, and paste it into your AI coding agent (Claude Code, Cursor, Codex, …) opened in your Android repo. The agent does the wiring for you:
+You don't have to integrate DevScope by hand. Click **Set up app**, pick **Android** or **iOS**, in the header (or the *Set up your app* link shown while DevScope is waiting for traffic), copy the prompt, and paste it into your AI coding agent (Claude Code, Cursor, Codex, …) opened in your Android or iOS repo. The agent does the wiring for you:
 
 - adds `DevScopeInterceptor` and `DevScopeLayoutAgent` to the **debug** source set — release builds are untouched;
 - installs them through a tiny `DevScope.install(context, builder)` facade (real in debug, no-op in release) as the last OkHttp interceptor;
@@ -48,6 +48,24 @@ You don't have to integrate DevScope by hand. Click **Set up app** in the header
 The prompt is generic (works for any project; set the **Module** field if your client lives outside `app`) and self-contained: the Kotlin sources are embedded, so the agent needs no network access. Untick **Embed the Kotlin sources** to get a shorter prompt that `curl`s them from `http://localhost:8765/android/` instead. Either way the result covers both the **Network** and the **Layout** inspector.
 
 Prefer to do it yourself? The manual steps are below.
+
+## Hook up your iOS app (debug builds only)
+
+1. Copy `ios/DevScope.swift` into the app target (it is wrapped in `#if DEBUG`, so Release compiles it to nothing). iOS 13+.
+2. Call it once at launch, guarded the same way:
+
+   ```swift
+   #if DEBUG
+   DevScope.start()
+   #endif
+   ```
+
+   It registers a `URLProtocol` on `URLSession.shared` and on `URLSessionConfiguration.default` / `.ephemeral`, so sessions created afterwards (Alamofire, Moya, plain URLSession) are mirrored — HTTPS included, since it runs inside the app. Sessions built from a configuration created *before* `start()` are not captured.
+3. Info.plist: `NSAppTransportSecurity` → `NSAllowsLocalNetworking = YES` (plain http/ws to the dev machine). For **physical iPhones** also add `NSLocalNetworkUsageDescription` and `NSBonjourServices = ["_devscope._tcp"]`: the app finds the Mac over Bonjour on the same Wi-Fi (or set `DevScope.serverHost` to the Mac's IP). Simulators just use `localhost`.
+
+The layout inspector shows the UIKit view hierarchy and, for SwiftUI, the accessibility tree (labels, identifiers, frames — SwiftUI does not expose its internal tree), with a screenshot taken by the agent itself. Devices are discovered with `xcrun simctl` (simulators) and `xcrun devicectl` (iPhones); on a Mac without Xcode the iOS side simply stays off.
+
+> Not verified on a real simulator yet: this Mac has no Xcode. The Swift file is syntax-checked only — please report anything the compiler dislikes.
 
 ## Hook up your Android app (debug builds only)
 
@@ -103,9 +121,10 @@ adb reverse tcp:8765 ───────────────────�
 ```
 
 - `desktop/` — Electron shell: `main.js` (server child process, adb discovery, settings), `preload.cjs`, `renderer/` (top bar + embedded UI).
-- `server/index.js` — Express + ws. Polls adb, enriches devices (model, Android version, AVD name, virtual/physical), sets up port reversing, buffers the last 2000 events, relays layout captures between browser (`/ws`) and in-app agents (`/agent`), serves device screenshots at `/api/screenshot/:serial`.
+- `server/index.js` — Express + ws. Polls adb and xcrun, enriches devices (model, OS version, virtual/physical), sets up `adb reverse` for Android, advertises itself over Bonjour for iPhones, buffers the last 2000 events.
 - `public/index.html` — the UI. Filter with `/`, search bodies with `⌘F`, navigate with ↑ ↓, `Esc` clears both.
 - `android/DevScopeInterceptor.kt` — captures request/response (bodies up to 512 KB, text-like content only) and reports asynchronously.
+- `ios/DevScope.swift` — the iOS drop-in: `URLProtocol` interceptor, layout agent (UIKit + SwiftUI accessibility), Bonjour/localhost transport.
 - `android/DevScopeLayoutAgent.kt` — keeps a WebSocket to `/agent` and answers `layout.dump` with the view + Compose semantics tree of the resumed activity.
 
 ## Next plugins

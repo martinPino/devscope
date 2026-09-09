@@ -3,6 +3,8 @@ import { WebSocketServer } from "ws";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import http from "node:http";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,6 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.PORT || 8765);
 const ADB = process.env.ADB || "adb";
+const XCRUN = process.env.XCRUN || "xcrun";
 const POLL_MS = 2000;
 const MAX_EVENTS = 2000;
 
@@ -18,8 +21,11 @@ const MAX_EVENTS = 2000;
 const devices = new Map(); // serial -> device info
 const events = [];         // network events (ring buffer)
 let adbAvailable = true;
-const agents = new Map();  // androidId -> ws (in-app layout agents)
-const layouts = new Map(); // serial -> last captured layout tree
+let iosAvailable = null;   // null = not probed yet, false = no Xcode tooling on this machine
+let iosRetryAt = 0;
+const agents = new Map();      // agent key -> { ws, ident } (in-app layout agents)
+const layouts = new Map();     // serial -> last captured layout tree
+const screenshots = new Map(); // serial -> PNG Buffer pushed by an agent with its layout
 
 // ---------- adb ----------
 async function adb(...args) {
@@ -64,6 +70,7 @@ async function enrich(serial, props) {
   }
   return {
     serial,
+    platform: "android",
     model: model || props.model || serial,
     manufacturer,
     release,
@@ -84,8 +91,85 @@ async function setupReverse(serial) {
   }
 }
 
+// ---------- ios: simulators via simctl, physical devices via devicectl ----------
+async function xcrun(args) {
+  const { stdout } = await exec(XCRUN, args, { timeout: 15000, maxBuffer: 16 * 1024 * 1024 });
+  return stdout;
+}
+
+// "com.apple.CoreSimulator.SimRuntime.iOS-17-5" -> { os: "iOS", release: "17.5" }
+function runtimeLabel(runtime) {
+  const m = /SimRuntime\.([A-Za-z]+)-(\d+)-(\d+)(?:-(\d+))?/.exec(runtime || "");
+  return m ? { os: m[1], release: [m[2], m[3], m[4]].filter(Boolean).join(".") } : { os: "iOS", release: "" };
+}
+
+async function listSimulators() {
+  const json = JSON.parse(await xcrun(["simctl", "list", "devices", "--json"]));
+  const out = [];
+  for (const [runtime, list] of Object.entries(json.devices || {})) {
+    const { os: osName, release } = runtimeLabel(runtime);
+    for (const d of list) {
+      if (d.state !== "Booted") continue;
+      out.push({ serial: d.udid, platform: "ios", type: "virtual", state: "device", model: d.name, avdName: d.name,
+        manufacturer: "Apple", os: osName, release, sdk: "", androidId: "", reverse: true });
+    }
+  }
+  return out;
+}
+
+let devicectlProbed = false, hasDevicectl = false;
+async function listPhysicalIos() {
+  if (!devicectlProbed) {
+    devicectlProbed = true;
+    try { await xcrun(["devicectl", "--version"]); hasDevicectl = true; } catch { hasDevicectl = false; }
+  }
+  if (!hasDevicectl) return [];
+  const file = path.join(os.tmpdir(), `devscope-devicectl-${process.pid}.json`);
+  await xcrun(["devicectl", "list", "devices", "--json-output", file, "--timeout", "5"]);
+  const json = JSON.parse(fs.readFileSync(file, "utf8"));
+  const out = [];
+  for (const d of json.result?.devices || []) {
+    const conn = d.connectionProperties || {};
+    if (conn.tunnelState && conn.tunnelState !== "connected") continue;
+    const hw = d.hardwareProperties || {}, props = d.deviceProperties || {};
+    out.push({ serial: hw.udid || d.identifier, platform: "ios", type: "physical", state: "device",
+      model: hw.marketingName || props.name || d.identifier, avdName: props.name || "", manufacturer: "Apple",
+      os: hw.platform || "iOS", release: props.osVersionNumber || "", sdk: "", androidId: "", reverse: true });
+  }
+  return out;
+}
+
+// Returns the list of connected iOS devices, or null when the tooling is unavailable
+// (no Xcode / simctl missing) so existing entries are kept and we back off for 30 s.
+async function pollIos() {
+  if (iosAvailable === false && Date.now() < iosRetryAt) return null;
+  try {
+    const sims = await listSimulators();
+    let phys = [];
+    try { phys = await listPhysicalIos(); } catch (e) { console.warn(`[ios] devicectl failed: ${e.message.split("\n")[0]}`); }
+    if (iosAvailable !== true) {
+      iosAvailable = true;
+      console.log("[ios] xcrun simctl available");
+      broadcast({ type: "tools", adb: adbAvailable, ios: true });
+    }
+    return [...sims, ...phys];
+  } catch (e) {
+    if (iosAvailable !== false) {
+      iosAvailable = false;
+      console.warn(`[ios] simctl not available (no Xcode?): ${e.message.split("\n")[0]}`);
+      broadcast({ type: "tools", adb: adbAvailable, ios: false });
+    }
+    iosRetryAt = Date.now() + 30000;
+    return null;
+  }
+}
+
 async function pollDevices() {
-  let list;
+  const seen = new Set();
+  let changed = false;
+
+  // Android (adb). On a transient adb failure keep the devices we already know.
+  let list = null;
   try {
     list = parseDevicesList(await adb("devices", "-l"));
     if (!adbAvailable) { adbAvailable = true; broadcast({ type: "adb", available: true }); }
@@ -95,30 +179,47 @@ async function pollDevices() {
       console.warn(`[adb] not available: ${e.message}`);
       broadcast({ type: "adb", available: false, error: e.message });
     }
-    return;
   }
-
-  const seen = new Set();
-  let changed = false;
-
-  for (const d of list) {
-    seen.add(d.serial);
-    const existing = devices.get(d.serial);
-    if (!existing || existing.state !== d.state) {
-      const info = d.state === "device"
-        ? await enrich(d.serial, d.props)
-        : { serial: d.serial, model: d.serial, type: d.serial.startsWith("emulator-") ? "virtual" : "physical" };
-      info.state = d.state;
-      info.reverse = d.state === "device" ? await setupReverse(d.serial) : false;
-      info.connectedAt = existing?.connectedAt ?? Date.now();
-      devices.set(d.serial, info);
-      changed = true;
-      console.log(`[device] ${d.state}: ${info.model} (${d.serial}) ${info.type}`);
+  if (list) {
+    for (const d of list) {
+      seen.add(d.serial);
+      const existing = devices.get(d.serial);
+      if (!existing || existing.state !== d.state) {
+        const info = d.state === "device"
+          ? await enrich(d.serial, d.props)
+          : { serial: d.serial, platform: "android", model: d.serial, type: d.serial.startsWith("emulator-") ? "virtual" : "physical" };
+        info.state = d.state;
+        info.reverse = d.state === "device" ? await setupReverse(d.serial) : false;
+        info.connectedAt = existing?.connectedAt ?? Date.now();
+        devices.set(d.serial, info);
+        changed = true;
+        console.log(`[device] ${d.state}: ${info.model} (${d.serial}) ${info.type}`);
+      }
     }
+  } else {
+    for (const [serial, d] of devices) if (d.platform === "android") seen.add(serial);
   }
+
+  // iOS (simctl / devicectl). Simulators reach us through localhost, so no port reverse is needed.
+  const ios = await pollIos();
+  if (ios) {
+    for (const info of ios) {
+      seen.add(info.serial);
+      if (!devices.has(info.serial)) {
+        info.connectedAt = Date.now();
+        devices.set(info.serial, info);
+        changed = true;
+        console.log(`[device] ios: ${info.model} (${info.serial}) ${info.type}`);
+      }
+    }
+  } else {
+    for (const [serial, d] of devices) if (d.platform === "ios") seen.add(serial);
+  }
+
   for (const serial of devices.keys()) {
     if (!seen.has(serial)) {
       devices.delete(serial);
+      screenshots.delete(serial);
       changed = true;
       console.log(`[device] disconnected: ${serial}`);
     }
@@ -132,6 +233,7 @@ app.use(express.json({ limit: "20mb" }));
 app.use(express.static(path.join(__dirname, "..", "public")));
 // Kotlin drop-ins, so the setup prompt can embed them and agents can `curl` them.
 app.use("/android", express.static(path.join(__dirname, "..", "android"), { setHeaders: (res) => res.type("text/plain; charset=utf-8") }));
+app.use("/ios", express.static(path.join(__dirname, "..", "ios"), { setHeaders: (res) => res.type("text/plain; charset=utf-8") }));
 
 app.get("/api/state", (_req, res) => {
   res.json({ adbAvailable, devices: [...devices.values()], events });
@@ -153,10 +255,20 @@ app.delete("/api/events", (_req, res) => {
 });
 
 app.get("/api/screenshot/:serial", async (req, res) => {
+  const serial = req.params.serial;
+  const dev = devices.get(serial);
   try {
+    const pushed = screenshots.get(serial);
+    if (pushed) return res.type("png").send(pushed);
+    if (dev?.platform === "ios") {
+      if (dev.type !== "virtual") return res.status(404).json({ error: "No screenshot yet — the in-app agent sends one with each layout capture." });
+      const file = path.join(os.tmpdir(), `devscope-shot-${process.pid}.png`);
+      await xcrun(["simctl", "io", serial, "screenshot", "--type=png", file]);
+      return res.type("png").send(fs.readFileSync(file));
+    }
     const { stdout } = await exec(
       ADB,
-      ["-s", req.params.serial, "exec-out", "screencap", "-p"],
+      ["-s", serial, "exec-out", "screencap", "-p"],
       { encoding: "buffer", maxBuffer: 32 * 1024 * 1024, timeout: 10000 }
     );
     res.type("png").send(stdout);
@@ -182,18 +294,26 @@ function normalizeEvent(b = {}) {
     responseSize: b.responseSize ?? null,
     error: b.error ?? null,
     androidId: b.androidId || null,
+    simulatorUdid: b.simulatorUdid || null,
+    platform: b.platform || (b.androidId ? "android" : null),
     appId: b.appId || null,
     deviceModel: b.deviceModel || null,
   };
 }
 
-function matchDevice(ev) {
-  if (ev.androidId) {
-    for (const d of devices.values()) if (d.androidId === ev.androidId) return d.serial;
-  }
-  if (devices.size === 1) return [...devices.keys()][0];
-  return null;
+// Simulators identify themselves exactly (SIMULATOR_UDID). Android's ANDROID_ID is per-app on
+// Android 8+ and iOS' identifierForVendor never equals a device UDID, so otherwise fall back to
+// the only connected device of that platform.
+function resolveSerial({ androidId, simulatorUdid, platform } = {}) {
+  if (simulatorUdid && devices.has(simulatorUdid)) return simulatorUdid;
+  if (androidId) for (const d of devices.values()) if (d.androidId && d.androidId === androidId) return d.serial;
+  const plat = platform || (androidId ? "android" : simulatorUdid ? "ios" : null);
+  const pool = [...devices.values()].filter((d) => !plat || d.platform === plat);
+  if (pool.length === 1) return pool[0].serial;
+  return devices.size === 1 ? [...devices.keys()][0] : null;
 }
+
+function matchDevice(ev) { return resolveSerial(ev); }
 
 // ---------- websocket ----------
 const server = http.createServer(app);
@@ -213,17 +333,10 @@ function broadcast(msg) {
   for (const c of wss.clients) if (c.readyState === 1) c.send(data);
 }
 
-function serialForAndroidId(androidId) {
-  for (const d of devices.values()) if (d.androidId === androidId) return d.serial;
-  return devices.size === 1 ? [...devices.keys()][0] : null;
-}
-
-// ANDROID_ID is per-app on Android 8+, so it rarely equals the device's global
-// android_id. Match exactly when we can, else fall back to the sole device.
 function agentSerials() {
   const out = new Set();
-  for (const aid of agents.keys()) {
-    const serial = serialForAndroidId(aid);
+  for (const { ident } of agents.values()) {
+    const serial = resolveSerial(ident);
     if (serial) out.add(serial);
   }
   return [...out];
@@ -231,8 +344,14 @@ function agentSerials() {
 
 function agentForSerial(serial) {
   const dev = devices.get(serial);
-  if (dev) for (const [aid, ws] of agents) if (aid === dev.androidId) return ws;
-  return agents.size === 1 ? [...agents.values()][0] : null;
+  if (!dev) return null;
+  for (const { ws, ident } of agents.values()) {
+    if (ident.simulatorUdid && ident.simulatorUdid === serial) return ws;
+    if (ident.androidId && dev.androidId && ident.androidId === dev.androidId) return ws;
+  }
+  const same = [...agents.values()].filter(({ ident }) => ident.platform === dev.platform);
+  if (same.length === 1) return same[0].ws;
+  return agents.size === 1 ? [...agents.values()][0].ws : null;
 }
 
 // Browsers on the Layout page with Live on. The agent only streams layout
@@ -253,7 +372,7 @@ function unwatchAll(ws) {
 
 wss.on("connection", (ws) => {
   ws.send(JSON.stringify({
-    type: "hello", adbAvailable, devices: [...devices.values()], events,
+    type: "hello", adbAvailable, ios: iosAvailable, devices: [...devices.values()], events,
     agents: agentSerials(), layouts: Object.fromEntries(layouts),
   }));
   ws.on("message", (data) => {
@@ -278,40 +397,63 @@ wss.on("connection", (ws) => {
   ws.on("close", () => unwatchAll(ws));
 });
 
-// In-app agents connect here (through the same adb reverse tunnel as /ingest).
+// In-app agents connect here (Android through the adb reverse tunnel, iOS simulators via
+// localhost, iPhones via Bonjour discovery of this server).
 agentWss.on("connection", (ws) => {
-  let androidId = null;
+  let key = null, ident = null;
   ws.on("message", (data) => {
     let msg;
     try { msg = JSON.parse(data); } catch { return; }
     if (msg.type === "hello") {
-      androidId = msg.androidId || "unknown";
-      agents.set(androidId, ws);
-      console.log(`[agent] connected: ${msg.appId ?? "?"} (${androidId})`);
+      ident = {
+        androidId: msg.androidId || null,
+        simulatorUdid: msg.simulatorUdid || null,
+        vendorId: msg.vendorId || null,
+        platform: msg.platform || (msg.androidId ? "android" : "ios"),
+        appId: msg.appId || null,
+      };
+      key = ident.simulatorUdid || ident.androidId || ident.vendorId || `anon-${Date.now()}`;
+      agents.set(key, { ws, ident });
+      console.log(`[agent] connected: ${ident.appId ?? "?"} (${ident.platform}, ${key})`);
       broadcast({ type: "agents", agents: agentSerials() });
       for (const serial of layoutWatchers.keys()) syncAgentWatch(serial);
     } else if (msg.type === "layout.tree") {
-      const serial = msg.serial || serialForAndroidId(androidId);
+      const serial = msg.serial || resolveSerial(ident || {});
       if (!serial) return;
+      if (typeof msg.screenshot === "string" && msg.screenshot) {
+        try { screenshots.set(serial, Buffer.from(msg.screenshot, "base64")); } catch { /* ignore bad data */ }
+      }
       const layout = { serial, activity: msg.activity ?? null, capturedAt: Date.now(), tree: msg.tree };
       layouts.set(serial, layout);
       broadcast({ type: "layout", layout });
     } else if (msg.type === "layout.error") {
-      broadcast({ type: "layout.error", serial: msg.serial || serialForAndroidId(androidId), error: msg.error });
+      broadcast({ type: "layout.error", serial: msg.serial || resolveSerial(ident || {}), error: msg.error });
     }
   });
   ws.on("close", () => {
-    if (androidId && agents.get(androidId) === ws) {
-      agents.delete(androidId);
-      console.log(`[agent] disconnected: ${androidId}`);
+    if (key && agents.get(key)?.ws === ws) {
+      agents.delete(key);
+      console.log(`[agent] disconnected: ${key}`);
       broadcast({ type: "agents", agents: agentSerials() });
     }
   });
 });
 
+// iPhones on the same Wi-Fi find this server through Bonjour (_devscope._tcp).
+async function advertise() {
+  try {
+    const { Bonjour } = await import("bonjour-service");
+    new Bonjour().publish({ name: `DevScope on ${os.hostname()}`, type: "devscope", port: PORT });
+    console.log("[bonjour] advertising _devscope._tcp");
+  } catch (e) {
+    console.warn(`[bonjour] not advertising (${e.message.split("\n")[0]}) — physical iPhones need DevScope.serverHost`);
+  }
+}
+
 server.listen(PORT, () => {
   console.log(`DevScope running at http://localhost:${PORT}`);
-  console.log(`Apps on connected devices report to http://localhost:${PORT}/ingest (via adb reverse)`);
+  console.log(`Apps report to http://localhost:${PORT}/ingest — Android via adb reverse, iOS simulators via localhost, iPhones via Bonjour`);
   pollDevices();
   setInterval(pollDevices, POLL_MS);
+  advertise();
 });

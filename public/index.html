@@ -27,6 +27,7 @@
   header { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--line); }
   header h1 { font-size: 15px; font-weight: 600; margin: 0 8px 0 0; letter-spacing: -0.01em; }
   #adb { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  #adb .sep { margin: 0 4px; opacity: .6; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .dot.on { background: var(--ok); } .dot.off { background: var(--err); }
   header .spacer { flex: 1; }
@@ -54,8 +55,13 @@
   .empty { color: var(--muted); padding: 8px 16px; font-size: 12px; }
   .empty code { font-family: var(--mono); color: var(--text); }
 
-  main { display: grid; grid-template-columns: minmax(420px, 1fr) minmax(360px, 46%); min-height: 0; }
-  #list { overflow-y: auto; border-right: 1px solid var(--line); }
+  main { --detail-w: 46%; display: grid; grid-template-columns: minmax(320px, 1fr) 7px var(--detail-w); min-height: 0; }
+  main.dragging { cursor: col-resize; user-select: none; }
+  main.dragging iframe, main.dragging #pane { pointer-events: none; }
+  .splitter { cursor: col-resize; border-left: 1px solid var(--line); position: relative; }
+  .splitter::after { content: ""; position: absolute; inset: 0 0 0 -1px; background: var(--accent); opacity: 0; transition: opacity .12s; }
+  .splitter:hover::after, main.dragging .splitter::after { opacity: .7; }
+  #list { overflow-y: auto; }
   table { width: 100%; border-collapse: collapse; }
   thead th { position: sticky; top: 0; background: var(--bg); text-align: left; font-weight: 500; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 12px; }
   tbody td { padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: middle; }
@@ -96,9 +102,9 @@
   .pages { display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px; }
   .pages button { border: 0; padding: 3px 10px; border-radius: 3px; color: var(--muted); }
   .pages button.active { background: var(--hover); color: var(--text); }
-  main > section[hidden] { display: none !important; } /* must beat #detail { display: flex } */
+  main > [hidden] { display: none !important; } /* must beat #detail { display: flex } */
 
-  #ltree { overflow: auto; border-right: 1px solid var(--line); padding-bottom: 12px; }
+  #ltree { overflow: auto; padding-bottom: 12px; }
   #ltree .toolbar { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); margin-bottom: 6px; position: sticky; top: 0; background: var(--bg); z-index: 1; }
   #ltree .toolbar .who { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #ltree .toolbar .live-toggle { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; cursor: pointer; user-select: none; }
@@ -109,7 +115,7 @@
   .lnode .row:hover { background: var(--hover); }
   .lnode .row.selected { background: var(--hover); box-shadow: inset 2px 0 0 var(--accent); }
   .caret { width: 12px; flex: none; color: var(--muted); user-select: none; }
-  .t-view { color: var(--post); } .t-compose { color: var(--get); }
+  .t-view, .t-uikit { color: var(--post); } .t-compose, .t-swiftui { color: var(--get); }
   .lnode .meta { color: var(--muted); } .lnode .txt { color: var(--text); opacity: .85; }
   .lnode .row.dim { opacity: .45; }
   #lside { overflow: auto; }
@@ -134,12 +140,15 @@
   .opts label { display: flex; align-items: center; gap: 6px; }
   .opts input[type=text] { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; width: 110px; font-family: var(--mono); font-size: 12px; }
   .opts input[type=checkbox] { accent-color: var(--accent); margin: 0; }
-  .opts a { color: var(--post); text-decoration: none; font-family: var(--mono); } .opts a:hover { text-decoration: underline; }
+  .opts a { color: var(--post); text-decoration: none; font-family: var(--mono); margin-left: 8px; } .opts a:hover { text-decoration: underline; }
+  .opts .seg { display: inline-flex; gap: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px; }
+  .opts .seg label { padding: 1px 8px; border-radius: 3px; cursor: pointer; } .opts .seg label:has(input:checked) { background: var(--hover); color: var(--text); }
+  .opts .seg input { position: absolute; opacity: 0; width: 0; height: 0; }
   .prompt { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; max-height: 42vh; overflow: auto; font-size: 11.5px; user-select: text; }
   .muted { color: var(--muted); font-size: 12px; }
   .spacer { flex: 1; }
   #list .empty a { color: var(--accent); }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; } #detail, #lside { display: none; } }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } #detail, #lside, .splitter { display: none; } }
 </style>
 </head>
 <body>
@@ -167,8 +176,10 @@
 
   <main>
     <section id="list"></section>
+    <div class="splitter" id="splitNet" title="Drag to resize · double-click to reset"></div>
     <section id="detail"></section>
     <section id="ltree" hidden></section>
+    <div class="splitter" id="splitLayout" hidden title="Drag to resize · double-click to reset"></div>
     <section id="lside" hidden>
       <div id="shot"><img alt="Device screenshot"><div class="hl"></div></div>
       <div id="lprops"></div>
@@ -185,11 +196,14 @@
       <li><b>Rebuild and launch the debug app</b> — requests and the layout tree show up here.</li>
     </ol>
     <div class="opts">
-      <label>Module <input type="text" id="setupModule" value="app" spellcheck="false"></label>
-      <label><input type="checkbox" id="setupEmbed" checked> Embed the Kotlin sources in the prompt</label>
+      <span class="seg" role="radiogroup" aria-label="Platform">
+        <label><input type="radio" name="setupPlatform" value="android" checked> Android</label>
+        <label><input type="radio" name="setupPlatform" value="ios"> iOS</label>
+      </span>
+      <label><span id="setupModuleLabel">Module</span> <input type="text" id="setupModule" value="app" spellcheck="false"></label>
+      <label><input type="checkbox" id="setupEmbed" checked> <span id="setupEmbedLabel">Embed the Kotlin sources in the prompt</span></label>
       <span class="spacer"></span>
-      <a href="/android/DevScopeInterceptor.kt" target="_blank" rel="noopener">DevScopeInterceptor.kt</a>
-      <a href="/android/DevScopeLayoutAgent.kt" target="_blank" rel="noopener">DevScopeLayoutAgent.kt</a>
+      <span id="setupLinks"></span>
     </div>
     <pre id="setupPrompt" class="prompt">Loading…</pre>
   </div>
@@ -200,7 +214,7 @@
 const state = {
   adb: null, devices: [], events: [], selectedDevice: null, selectedEvent: null,
   tab: "response", filter: "", search: "", page: "network",
-  ws: null, agents: [], layouts: {}, selectedNode: null, collapsed: new Set(), capturing: false,
+  ws: null, agents: [], layouts: {}, selectedNode: null, collapsed: new Set(), capturing: false, ios: null,
   live: true, shotAt: 0, shotTimer: null,
 };
 const $ = (s) => document.querySelector(s);
@@ -212,12 +226,13 @@ function connect() {
   ws.onmessage = (m) => {
     const msg = JSON.parse(m.data);
     if (msg.type === "hello") {
-      state.adb = msg.adbAvailable; state.devices = msg.devices; state.events = msg.events;
+      state.adb = msg.adbAvailable; state.ios = msg.ios ?? null; state.devices = msg.devices; state.events = msg.events;
       state.agents = msg.agents ?? []; state.layouts = msg.layouts ?? {};
       renderAll(); sendWatch();
     }
     else if (msg.type === "devices") { state.devices = msg.devices; renderDevices(); renderList(); renderLayout(); sendWatch(); }
     else if (msg.type === "adb") { state.adb = msg.available; renderAdb(); renderDevices(); }
+    else if (msg.type === "tools") { state.adb = msg.adb; state.ios = msg.ios; renderAdb(); renderDevices(); }
     else if (msg.type === "network") { state.events.push(msg.event); if (state.events.length > 2000) state.events.shift(); renderList(); }
     else if (msg.type === "clear") { state.events = []; state.selectedEvent = null; renderList(); renderDetail(); }
     else if (msg.type === "agents") { state.agents = msg.agents; renderLayout(); sendWatch(); }
@@ -240,9 +255,10 @@ function renderAll() { renderAdb(); renderDevices(); renderList(); renderDetail(
 
 function renderAdb() {
   const el = $("#adb");
-  const cls = state.adb === null ? "" : state.adb ? "on" : "off";
-  const txt = state.adb === null ? "server offline" : state.adb ? "adb connected" : "adb not found";
-  el.innerHTML = `<span class="dot ${cls}"></span><span>${txt}</span>`;
+  if (state.adb === null) { el.innerHTML = `<span class="dot"></span><span>server offline</span>`; return; }
+  const parts = [[state.adb ? "on" : "off", state.adb ? "adb connected" : "adb not found"]];
+  if (state.ios) parts.push(["on", "xcrun connected"]);
+  el.innerHTML = parts.map(([cls, txt]) => `<span class="dot ${cls}"></span><span>${txt}</span>`).join(`<span class="sep">·</span>`);
 }
 
 function renderDevices() {
@@ -255,11 +271,12 @@ function renderDevices() {
   }
   const all = `<button class="device ${state.selectedDevice === null ? "selected" : ""}" data-serial="">
       <div class="name">All devices</div><div class="meta">${state.devices.length} connected</div></button>`;
+  // (device rows show a short serial for iOS UDIDs; the full one is in the title)
   box.innerHTML = all + state.devices.map((d) => `
-    <button class="device ${state.selectedDevice === d.serial ? "selected" : ""}" data-serial="${d.serial}">
-      <div class="name"><span>${esc(d.avdName || d.model)}</span><span class="tag ${d.type}">${d.type}</span></div>
-      <div class="meta">${d.state !== "device" ? esc(d.state) : `Android ${esc(d.release)} · API ${esc(d.sdk)}`} · <span class="mono">${esc(d.serial)}</span></div>
-      ${d.state === "device" && !d.reverse ? `<div class="meta err">adb reverse failed — app must use 10.0.2.2</div>` : ""}
+    <button class="device ${state.selectedDevice === d.serial ? "selected" : ""}" data-serial="${d.serial}" title="${esc(d.serial)}">
+      <div class="name"><span>${esc(d.avdName || d.model)}</span><span class="tag ${d.type}">${d.platform === "ios" ? (d.type === "virtual" ? "simulator" : "iphone") : d.type}</span></div>
+      <div class="meta">${d.state !== "device" ? esc(d.state) : d.platform === "ios" ? `${esc(d.os || "iOS")} ${esc(d.release)}` : `Android ${esc(d.release)} · API ${esc(d.sdk)}`} · <span class="mono">${esc(d.platform === "ios" ? d.serial.slice(0, 8) : d.serial)}</span></div>
+      ${d.platform !== "ios" && d.state === "device" && !d.reverse ? `<div class="meta err">adb reverse failed — app must use 10.0.2.2</div>` : ""}
     </button>`).join("");
   box.querySelectorAll(".device").forEach((b) => b.onclick = () => { state.selectedDevice = b.dataset.serial || null; renderDevices(); renderList(); renderLayout(); sendWatch(); });
 }
@@ -368,7 +385,7 @@ function renderProps() {
   const n = pathNode(state.selectedNode);
   if (!n) { box.innerHTML = `<p class="empty" style="padding:8px 0">Select a node — hovering highlights it on the screenshot.</p>`; return; }
   const rows = {
-    kind: n.kind === "compose" ? "composable (semantics)" : "view",
+    kind: { compose: "composable (semantics)", swiftui: "SwiftUI (accessibility)", uikit: "UIView", view: "view" }[n.kind] ?? n.kind,
     type: n.type, id: n.id, text: n.text, desc: n.desc,
     bounds: n.bounds ? `x:${n.bounds[0]}  y:${n.bounds[1]}  w:${n.bounds[2]}  h:${n.bounds[3]}` : null,
     visible: n.hidden ? "no" : "yes",
@@ -541,6 +558,36 @@ function highlight(json) {
   });
 }
 
+// ---------- resizable detail column ----------
+(() => {
+  const main = document.querySelector("main");
+  const KEY = "devscope.detailWidth";
+  const apply = (px) => main.style.setProperty("--detail-w", px == null ? "46%" : `${px}px`);
+  try { const saved = Number(localStorage.getItem(KEY)); if (saved > 0) apply(saved); } catch {}
+  document.querySelectorAll(".splitter").forEach((sp) => {
+    sp.onpointerdown = (ev) => {
+      ev.preventDefault();
+      try { sp.setPointerCapture(ev.pointerId); } catch {}
+      main.classList.add("dragging");
+      const rect = main.getBoundingClientRect();
+      const move = (e) => {
+        const w = Math.min(rect.width - 320, Math.max(280, rect.right - e.clientX));
+        apply(w);
+      };
+      const up = () => {
+        sp.removeEventListener("pointermove", move);
+        sp.removeEventListener("pointerup", up);
+        main.classList.remove("dragging");
+        const w = parseFloat(getComputedStyle(main).getPropertyValue("--detail-w"));
+        try { if (w) localStorage.setItem(KEY, String(Math.round(w))); } catch {}
+      };
+      sp.addEventListener("pointermove", move);
+      sp.addEventListener("pointerup", up);
+    };
+    sp.ondblclick = () => { apply(null); try { localStorage.removeItem(KEY); } catch {} };
+  });
+})();
+
 // ---------- body search matches ----------
 function countIn(s, needle) {
   if (!s) return 0;
@@ -586,8 +633,8 @@ document.querySelectorAll(".pages button").forEach((b) => b.onclick = () => {
   state.page = b.dataset.page;
   document.querySelectorAll(".pages button").forEach((x) => x.classList.toggle("active", x === b));
   const layout = state.page === "layout";
-  $("#list").hidden = layout; $("#detail").hidden = layout;
-  $("#ltree").hidden = !layout; $("#lside").hidden = !layout;
+  $("#list").hidden = layout; $("#detail").hidden = layout; $("#splitNet").hidden = layout;
+  $("#ltree").hidden = !layout; $("#lside").hidden = !layout; $("#splitLayout").hidden = !layout;
   renderLayout();
   sendWatch();
   if (layout && layoutSerial() && !state.layouts[layoutSerial()]) captureLayout();
@@ -623,13 +670,100 @@ document.addEventListener("keydown", (ev) => {
   }
 });
 // ---------- setup prompt ----------
-const SETUP_FILES = ["DevScopeInterceptor.kt", "DevScopeLayoutAgent.kt"];
+const SETUP = {
+  android: { dir: "android", files: ["DevScopeInterceptor.kt", "DevScopeLayoutAgent.kt"], lang: "kotlin", moduleLabel: "Module", moduleDefault: "app", modulePlaceholder: "app", embedLabel: "Embed the Kotlin sources in the prompt" },
+  ios: { dir: "ios", files: ["DevScope.swift"], lang: "swift", moduleLabel: "Target", moduleDefault: "", modulePlaceholder: "e.g. MyApp", embedLabel: "Embed the Swift source in the prompt" },
+};
 const setupSources = {};
-async function loadSetupSources() {
-  await Promise.all(SETUP_FILES.map(async (f) => {
-    if (f in setupSources) return;
-    try { const r = await fetch(`/android/${f}`); setupSources[f] = r.ok ? await r.text() : null; } catch { setupSources[f] = null; }
+function setupPlatform() { return document.querySelector('input[name="setupPlatform"]:checked')?.value ?? "android"; }
+async function loadSetupSources(platform) {
+  const cfg = SETUP[platform];
+  await Promise.all(cfg.files.map(async (f) => {
+    const key = `${cfg.dir}/${f}`;
+    if (key in setupSources) return;
+    try { const r = await fetch(`/${key}`); setupSources[key] = r.ok ? await r.text() : null; } catch { setupSources[key] = null; }
   }));
+}
+function setupSource(platform, f) { return setupSources[`${SETUP[platform].dir}/${f}`]; }
+
+function buildIosPrompt({ embed, target }) {
+  const origin = location.origin;
+  const port = location.port || "80";
+  const t = (target || "").trim();
+  const dir = `${t || "<AppTarget>"}/DevScope`;
+  const canEmbed = embed && !!setupSource("ios", "DevScope.swift");
+  const fetchBlock = [
+    "Fetch it from the running DevScope server:",
+    "```bash",
+    `mkdir -p ${dir}`,
+    `curl -fsSL ${origin}/ios/DevScope.swift -o ${dir}/DevScope.swift`,
+    "```",
+    "If that URL is not reachable from your environment, stop and ask me to paste the file.",
+  ].join("\n");
+  const head = `# Task: integrate DevScope (network + layout inspector) into this iOS project
+
+DevScope is a Flipper-style inspector running on my machine at ${origin}. Goal: DEBUG builds mirror every URLSession request/response (Network inspector) and expose the UIKit view hierarchy plus the SwiftUI accessibility tree (Layout inspector). Release builds must be completely unaffected: the drop-in is wrapped in \`#if DEBUG\` and compiles to nothing otherwise, and the call site must be guarded the same way.
+
+Work in the app target${t ? ` (I believe it is \`${t}\`; verify)` : ""}. Before editing, find where the app starts (the \`@main\` App struct or the AppDelegate's \`application(_:didFinishLaunchingWithOptions:)\`) and check Info.plist for an existing \`NSAppTransportSecurity\` dictionary. Minimum deployment target is iOS 13.
+
+## 1. Add the drop-in file
+- \`${dir}/DevScope.swift\` — add it to the app target only (not to extensions or test targets).
+
+${canEmbed ? "Its full contents are at the end of this prompt — create it verbatim." : fetchBlock}
+
+It only uses Foundation, UIKit and Network; no package or pod is needed.
+
+## 2. Start it at launch, debug only
+SwiftUI app:
+\`\`\`swift
+@main
+struct MyApp: App {
+    init() {
+        #if DEBUG
+        DevScope.start()
+        #endif
+    }
+    // ...
+}
+\`\`\`
+UIKit app: the same guarded call at the very top of \`application(_:didFinishLaunchingWithOptions:)\`.
+
+Call it before any URLSession is created (Alamofire/Moya sessions included): the interceptor is injected into \`URLSession.shared\` and into \`URLSessionConfiguration.default\` / \`.ephemeral\` at start time, so sessions built from a configuration created earlier are not captured. If you find such a session, move \`DevScope.start()\` before it, or add \`DevScopeURLProtocol.self\` at the front of that configuration's \`protocolClasses\` under \`#if DEBUG\`.
+
+## 3. Allow plain HTTP/WebSocket to the dev machine (Info.plist)
+Add, or merge into the existing \`NSAppTransportSecurity\` dictionary:
+\`\`\`xml
+<key>NSAppTransportSecurity</key>
+<dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+</dict>
+\`\`\`
+That key only relaxes ATS for local-network hosts and is accepted on the App Store, so it may stay in every configuration; if the project already uses per-configuration Info.plists, put it in Debug only.
+
+For **physical iPhones** the app finds the Mac over Bonjour on the same Wi-Fi, which additionally needs:
+\`\`\`xml
+<key>NSLocalNetworkUsageDescription</key>
+<string>DevScope (debug builds only) connects to the developer's Mac.</string>
+<key>NSBonjourServices</key>
+<array>
+    <string>_devscope._tcp</string>
+</array>
+\`\`\`
+Simulators need neither: they reach the Mac through localhost. If Bonjour is not an option, \`DevScope.serverHost = "<Mac IP>"\` before \`start()\` works too.
+
+## 4. Verify
+1. Build Debug and Release (e.g. \`xcodebuild -scheme <Scheme> -configuration Release build\`): Release must compile and contain no DevScope symbols.
+2. Run the Debug app on a simulator while DevScope is open at ${origin}. Expected: requests appear in the Network tab within a second, Layout → Capture shows the tree with a screenshot, and the Xcode console prints "DevScope: layout agent connecting to ws://localhost:${port}/agent".
+3. A session missing from the Network tab was created before \`DevScope.start()\` or from a hand-built configuration — see step 2.
+
+## Rules
+- Keep the change minimal and isolated; do not refactor unrelated code.
+- Do not add dependencies. Tell me before touching project settings other than Info.plist.
+- Do not commit. When done, list every file you created or changed and anything you had to adapt.
+`;
+  if (!canEmbed) return head;
+  return head + `\n---\n# File to create verbatim\n\n## File: ${dir}/DevScope.swift\n\`\`\`swift\n${setupSource("ios", "DevScope.swift").trimEnd()}\n\`\`\`\n`;
 }
 
 function buildSetupPrompt({ embed, module }) {
@@ -637,7 +771,8 @@ function buildSetupPrompt({ embed, module }) {
   const port = location.port || "80";
   const mod = (module || "app").trim().replace(/^:+|\/+$/g, "") || "app";
   const dbg = `${mod}/src/debug/java/dev/devscope`;
-  const canEmbed = embed && SETUP_FILES.every((f) => setupSources[f]);
+  const SETUP_FILES = SETUP.android.files;
+  const canEmbed = embed && SETUP_FILES.every((f) => setupSource("android", f));
   const fetchBlock = [
     "Fetch them from the running DevScope server:",
     "```bash",
@@ -730,18 +865,22 @@ If a network security config ALREADY exists, do not add a second one: copy it in
 - Do not commit. When done, list every file you created or changed and anything you had to adapt.
 `;
   if (!canEmbed) return head;
-  const files = SETUP_FILES.map((f) => `\n## File: ${dbg}/${f}\n\`\`\`kotlin\n${setupSources[f].trimEnd()}\n\`\`\`\n`).join("");
+  const files = SETUP_FILES.map((f) => `\n## File: ${dbg}/${f}\n\`\`\`kotlin\n${setupSource("android", f).trimEnd()}\n\`\`\`\n`).join("");
   return head + "\n---\n# Files to create verbatim\n" + files;
 }
 
 let setupPromptText = "";
 async function renderSetupPrompt() {
-  await loadSetupSources();
+  const platform = setupPlatform();
+  const cfg = SETUP[platform];
+  await loadSetupSources(platform);
   const embed = $("#setupEmbed").checked;
-  setupPromptText = buildSetupPrompt({ embed, module: $("#setupModule").value });
+  setupPromptText = platform === "ios"
+    ? buildIosPrompt({ embed, target: $("#setupModule").value })
+    : buildSetupPrompt({ embed, module: $("#setupModule").value });
   $("#setupPrompt").textContent = setupPromptText;
   const kb = (new Blob([setupPromptText]).size / 1024).toFixed(1);
-  const missing = embed && !SETUP_FILES.every((f) => setupSources[f]);
+  const missing = embed && !cfg.files.every((f) => setupSource(platform, f));
   $("#setupMeta").textContent = `${setupPromptText.split("\n").length} lines · ${kb} KB` + (missing ? " · sources unavailable, prompt tells the agent to curl them" : "");
 }
 // Inside the desktop app the page is an iframe: hand the text to the shell, which writes
@@ -777,6 +916,17 @@ $("#setupDlg").querySelectorAll("[data-close]").forEach((b) => b.onclick = () =>
 $("#setupDlg").onclick = (ev) => { if (ev.target === $("#setupDlg")) $("#setupDlg").close(); };
 $("#setupEmbed").onchange = renderSetupPrompt;
 $("#setupModule").oninput = renderSetupPrompt;
+function applySetupPlatform() {
+  const cfg = SETUP[setupPlatform()];
+  $("#setupModuleLabel").textContent = cfg.moduleLabel;
+  $("#setupModule").value = cfg.moduleDefault;
+  $("#setupModule").placeholder = cfg.modulePlaceholder;
+  $("#setupEmbedLabel").textContent = cfg.embedLabel;
+  $("#setupLinks").innerHTML = cfg.files.map((f) => `<a href="/${cfg.dir}/${f}" target="_blank" rel="noopener">${f}</a>`).join("");
+  renderSetupPrompt();
+}
+document.querySelectorAll('input[name="setupPlatform"]').forEach((r) => r.onchange = applySetupPlatform);
+applySetupPlatform();
 $("#setupCopy").onclick = async () => {
   const ok = await copyText(setupPromptText);
   const b = $("#setupCopy");
