@@ -56,6 +56,15 @@ api.onState((s) => { state = s; render(); });
 api.onLog(appendLog);
 api.onReloadUi(() => { if (currentUrl) $("#app").src = currentUrl; });
 
+// The embedded UI asks us to copy (iframes can't reliably reach the clipboard); main does it via Electron.
+window.addEventListener("message", async (ev) => {
+  const frame = $("#app");
+  if (!currentUrl || ev.source !== frame.contentWindow || ev.origin !== new URL(currentUrl).origin) return;
+  if (ev.data?.type !== "devscope:copy") return;
+  const ok = await api.copyText(String(ev.data.text ?? "")).catch(() => false);
+  ev.source.postMessage({ type: "devscope:copied", id: ev.data.id, ok }, ev.origin);
+});
+
 const toggle = () => (state?.status === "running" ? api.stop() : api.start());
 $("#toggle").onclick = toggle;
 $("#idleStart").onclick = () => api.start();

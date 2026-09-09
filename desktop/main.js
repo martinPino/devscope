@@ -1,6 +1,6 @@
 // DevScope desktop shell. Runs the DevScope server as a child process and shows
 // the web UI in a window, so no terminal is needed to start it.
-import { app, BrowserWindow, Menu, dialog, ipcMain, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, shell, utilityProcess } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -176,6 +176,7 @@ ipcMain.handle("choose-adb", async () => {
   return publicSettings();
 });
 ipcMain.handle("open-external", (_e, url) => shell.openExternal(String(url)));
+ipcMain.handle("copy-text", async (_e, text) => { await clipboard.writeText(String(text ?? "")); return true; });
 
 // ---------- dev hook: DEVSCOPE_SCREENSHOT=/path.png captures the window, DEVSCOPE_QUIT_AFTER=1 exits ----------
 function scheduleScreenshot() {
@@ -187,7 +188,34 @@ function scheduleScreenshot() {
   }, Number(process.env.DEVSCOPE_SCREENSHOT_DELAY || 4000));
 }
 
+// ---------- dev hook: DEVSCOPE_E2E_COPY=1 clicks "Copy prompt" in the embedded UI and reports the clipboard ----------
+async function e2eCopyCheck() {
+  if (process.env.DEVSCOPE_E2E_COPY !== "1") return;
+  const deadline = Date.now() + 20000;
+  let frame = null;
+  while (Date.now() < deadline && !frame) {
+    await sleep(250);
+    frame = win?.webContents.mainFrame.frames.find((f) => state.url && f.url.startsWith(state.url)) ?? null;
+  }
+  if (!frame) { console.log(JSON.stringify({ e2e: "copy", error: "embedded UI frame not found" })); app.exit(1); return; }
+  await sleep(1000);
+  await clipboard.writeText("sentinel");
+  const r = await frame.executeJavaScript(`(async () => {
+    document.querySelector("#setup").click(); await new Promise((r) => setTimeout(r, 600));
+    document.querySelector("#setupCopy").click(); await new Promise((r) => setTimeout(r, 800));
+    const t = document.querySelector("#setupPrompt").textContent;
+    return { button: document.querySelector("#setupCopy").textContent, promptLen: t.length, head: t.slice(0, 40) };
+  })()`, true);
+  const clip = await clipboard.readText();
+  console.log(JSON.stringify({ e2e: "copy", ...r, clipboardLen: clip.length, clipboardMatchesPrompt: clip.length === r.promptLen && clip.slice(0, 40) === r.head }));
+  app.exit(0);
+}
+
 // ---------- app ----------
+// Dev runs (`npm run desktop`) keep their own settings and single-instance lock,
+// so they never collide with an installed DevScope.app.
+if (!app.isPackaged) app.setPath("userData", app.getPath("userData") + "-dev");
+
 // Single instance: launching DevScope again just focuses the existing window.
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -196,12 +224,14 @@ if (!app.requestSingleInstanceLock()) {
 }
 app.whenReady().then(() => {
   loadSettings();
+  if (process.env.DEVSCOPE_PORT) settings.port = Number(process.env.DEVSCOPE_PORT) || settings.port; // per-launch override, not persisted
   state.port = Number(settings.port) || DEFAULTS.port;
   state.adb = findAdb();
   buildMenu();
   createWindow();
   if (settings.autoStart || process.env.DEVSCOPE_AUTOSTART === "1") startServer();
   scheduleScreenshot();
+  e2eCopyCheck();
   app.on("activate", () => { if (!win) createWindow(); });
 });
 app.on("window-all-closed", () => app.quit());

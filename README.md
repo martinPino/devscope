@@ -32,9 +32,11 @@ npm run dist           # build DevScope.app + .dmg/.zip into dist/ (macOS)
 - **Logs** shows the server output; **Open in browser** opens the same UI in your default browser.
 
 Settings live in `~/Library/Application Support/devscope/settings.json` (`autoStart`, `adbPath`, `port`).
-Dev hooks: `DEVSCOPE_AUTOSTART=1` forces a start, `DEVSCOPE_SCREENSHOT=/path.png` (+ `DEVSCOPE_QUIT_AFTER=1`) captures the window for automated checks.
+Dev hooks: `DEVSCOPE_PORT=8766` overrides the port for one launch, `DEVSCOPE_AUTOSTART=1` forces a start, `DEVSCOPE_E2E_COPY=1` verifies the Copy-prompt button end to end, `DEVSCOPE_SCREENSHOT=/path.png` (+ `DEVSCOPE_QUIT_AFTER=1`) captures the window for automated checks.
 
 ## Hook up your Android app (debug builds only)
+
+Shortcut: click **Set up app** in the header (or the link in the empty state) to copy a ready-made prompt for your AI coding agent (Claude Code, Cursor, Codex…). It contains the steps below, the Kotlin sources and the gotchas, so the agent wires your repo up for both the Network and the Layout inspector — debug builds only.
 
 1. Copy `android/DevScopeInterceptor.kt` into your project.
 2. Add it as the **last** interceptor on your `OkHttpClient` (Retrofit uses this client too):

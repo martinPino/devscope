@@ -130,6 +130,8 @@ async function pollDevices() {
 const app = express();
 app.use(express.json({ limit: "20mb" }));
 app.use(express.static(path.join(__dirname, "..", "public")));
+// Kotlin drop-ins, so the setup prompt can embed them and agents can `curl` them.
+app.use("/android", express.static(path.join(__dirname, "..", "android"), { setHeaders: (res) => res.type("text/plain; charset=utf-8") }));
 
 app.get("/api/state", (_req, res) => {
   res.json({ adbAvailable, devices: [...devices.values()], events });

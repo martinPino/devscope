@@ -118,6 +118,27 @@
   #shot .hl { position: absolute; border: 1.5px solid var(--accent); background: rgba(240, 180, 41, .18); pointer-events: none; display: none; }
   #lprops { padding: 4px 16px 16px; }
   #lprops h3 { font-size: 12px; color: var(--muted); font-weight: 500; margin: 10px 0 6px; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.primary:hover { filter: brightness(1.06); }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 0; width: min(880px, 92vw); max-height: 88vh; display: none; flex-direction: column; box-shadow: 0 24px 60px rgba(0,0,0,.5); }
+  dialog[open] { display: flex; }
+  dialog::backdrop { background: rgba(0, 0, 0, .55); }
+  .dhead, .dfoot { display: flex; align-items: center; gap: 10px; padding: 12px 16px; }
+  .dhead { border-bottom: 1px solid var(--line); } .dfoot { border-top: 1px solid var(--line); }
+  .dhead h2 { margin: 0; font-size: 15px; font-weight: 600; flex: 1; }
+  .dhead .x { border: 0; padding: 2px 8px; color: var(--muted); font-size: 14px; }
+  .dbody { padding: 12px 16px; overflow: auto; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  .steps { margin: 0; padding-left: 20px; color: var(--muted); line-height: 1.6; }
+  .steps b { color: var(--text); font-weight: 500; }
+  .opts { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .opts label { display: flex; align-items: center; gap: 6px; }
+  .opts input[type=text] { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; width: 110px; font-family: var(--mono); font-size: 12px; }
+  .opts input[type=checkbox] { accent-color: var(--accent); margin: 0; }
+  .opts a { color: var(--post); text-decoration: none; font-family: var(--mono); } .opts a:hover { text-decoration: underline; }
+  .prompt { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; max-height: 42vh; overflow: auto; font-size: 11.5px; user-select: text; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .spacer { flex: 1; }
+  #list .empty a { color: var(--accent); }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } #detail, #lside { display: none; } }
 </style>
 </head>
@@ -135,6 +156,7 @@
     <input id="search" placeholder="Search in bodies (⌘F)" aria-label="Search inside request and response bodies">
     <span id="matches" hidden></span>
     <span class="live"><span class="dot"></span><span id="count">0 requests</span></span>
+    <button id="setup" title="Copy a prompt that makes an AI agent wire your Android app up">Set up app</button>
     <button id="clear">Clear</button>
   </header>
 
@@ -153,6 +175,26 @@
     </section>
   </main>
 </div>
+
+<dialog id="setupDlg" aria-labelledby="setupTitle">
+  <div class="dhead"><h2 id="setupTitle">Set up your Android app</h2><button class="x" data-close aria-label="Close">✕</button></div>
+  <div class="dbody">
+    <ol class="steps">
+      <li><b>Copy the prompt</b> below.</li>
+      <li><b>Paste it into your AI coding agent</b> (Claude Code, Cursor, Codex…) opened in your Android repo. It adds the interceptor, the layout agent and the cleartext config to debug builds only.</li>
+      <li><b>Rebuild and launch the debug app</b> — requests and the layout tree show up here.</li>
+    </ol>
+    <div class="opts">
+      <label>Module <input type="text" id="setupModule" value="app" spellcheck="false"></label>
+      <label><input type="checkbox" id="setupEmbed" checked> Embed the Kotlin sources in the prompt</label>
+      <span class="spacer"></span>
+      <a href="/android/DevScopeInterceptor.kt" target="_blank" rel="noopener">DevScopeInterceptor.kt</a>
+      <a href="/android/DevScopeLayoutAgent.kt" target="_blank" rel="noopener">DevScopeLayoutAgent.kt</a>
+    </div>
+    <pre id="setupPrompt" class="prompt">Loading…</pre>
+  </div>
+  <div class="dfoot"><span id="setupMeta" class="muted"></span><span class="spacer"></span><button data-close>Close</button><button id="setupCopy" class="primary">Copy prompt</button></div>
+</dialog>
 
 <script>
 const state = {
@@ -376,7 +418,7 @@ function renderList() {
   $("#count").textContent = `${evs.length} request${evs.length === 1 ? "" : "s"}`;
   if (!evs.length) {
     list.innerHTML = `<div class="empty">${state.events.length ? "Nothing matches this filter." :
-      "Waiting for traffic.<br>Add <span class=\"mono\">DevScopeInterceptor</span> to your OkHttpClient, or run <span class=\"mono\">npm run demo</span> to see sample requests."}</div>`;
+      "Waiting for traffic.<br><a href=\"#\" data-setup>Set up your app</a> (copy a prompt for your AI agent), or run <span class=\"mono\">npm run demo</span> to see sample requests."}</div>`;
     return;
   }
   const maxDur = Math.max(200, ...evs.map((e) => e.durationMs || 0));
@@ -564,6 +606,7 @@ $("#search").oninput = (ev) => {
 $("#search").onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); jumpMatch(ev.shiftKey ? -1 : 1); } };
 $("#clear").onclick = () => fetch("/api/events", { method: "DELETE" });
 document.addEventListener("keydown", (ev) => {
+  if ($("#setupDlg").open) { if (ev.key === "Escape") $("#setupDlg").close(); return; }
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "f") { ev.preventDefault(); $("#search").focus(); $("#search").select(); }
   if (ev.key === "/" && document.activeElement !== $("#filter") && document.activeElement !== $("#search")) { ev.preventDefault(); $("#filter").focus(); }
   if (ev.key === "Escape") {
@@ -579,6 +622,168 @@ document.addEventListener("keydown", (ev) => {
     $("#list").querySelector(`tr[data-id="${next.id}"]`)?.scrollIntoView({ block: "nearest" });
   }
 });
+// ---------- setup prompt ----------
+const SETUP_FILES = ["DevScopeInterceptor.kt", "DevScopeLayoutAgent.kt"];
+const setupSources = {};
+async function loadSetupSources() {
+  await Promise.all(SETUP_FILES.map(async (f) => {
+    if (f in setupSources) return;
+    try { const r = await fetch(`/android/${f}`); setupSources[f] = r.ok ? await r.text() : null; } catch { setupSources[f] = null; }
+  }));
+}
+
+function buildSetupPrompt({ embed, module }) {
+  const origin = location.origin;
+  const port = location.port || "80";
+  const mod = (module || "app").trim().replace(/^:+|\/+$/g, "") || "app";
+  const dbg = `${mod}/src/debug/java/dev/devscope`;
+  const canEmbed = embed && SETUP_FILES.every((f) => setupSources[f]);
+  const fetchBlock = [
+    "Fetch them from the running DevScope server:",
+    "```bash",
+    `mkdir -p ${dbg}`,
+    ...SETUP_FILES.map((f) => `curl -fsSL ${origin}/android/${f} -o ${dbg}/${f}`),
+    "```",
+    "If that URL is not reachable from your environment, stop and ask me to paste the two files.",
+  ].join("\n");
+  const head = `# Task: integrate DevScope (network + layout inspector) into this Android project
+
+DevScope is a Flipper-style inspector running on my machine at ${origin}. Its server runs \`adb reverse tcp:${port} tcp:${port}\` for every connected device, so inside the app \`http://localhost:${port}\` reaches it (emulators can also use \`10.0.2.2\`). Goal: DEBUG builds report every OkHttp request/response (Network inspector) and expose the View + Jetpack Compose tree (Layout inspector). Release builds must be completely unaffected — no \`dev.devscope\` class may end up in a release APK.
+
+Work in the module that builds the app's OkHttpClient. I believe it is \`${mod}\`; verify and adapt the paths below if it lives elsewhere (e.g. a \`network\` or \`core\` module). Before editing, read how the OkHttpClient is built (search for \`OkHttpClient.Builder\`) and whether a network security config already exists (search for \`networkSecurityConfig\`).
+
+## 1. Add the two Kotlin files (package \`dev.devscope\`) to the DEBUG source set
+- \`${dbg}/DevScopeInterceptor.kt\`
+- \`${dbg}/DevScopeLayoutAgent.kt\`
+
+${canEmbed ? "Their full contents are at the end of this prompt — create them verbatim." : fetchBlock}
+
+Do NOT put them in \`src/main\`. They only need OkHttp and \`org.json\` (bundled in Android). \`DevScopeLayoutAgent\` also imports \`androidx.compose.ui\` for the Compose semantics tree: if this module does not have Jetpack Compose UI on its classpath, delete the \`androidx.compose\` imports plus the \`composeTree\` and \`dumpSemantics\` functions (and the call to \`composeTree\`) so it compiles as a plain View-tree agent.
+
+## 2. Wire it through a facade, so main code never references debug-only classes
+Create \`dev.devscope.DevScope\` in TWO places.
+
+\`${dbg}/DevScope.kt\` (debug):
+\`\`\`kotlin
+package dev.devscope
+
+import android.content.Context
+import okhttp3.OkHttpClient
+
+object DevScope {
+    /** Call right before .build(), after every other interceptor, so DevScope sees the final request. */
+    fun install(context: Context, builder: OkHttpClient.Builder): OkHttpClient.Builder {
+        runCatching { DevScopeLayoutAgent.start(context) }
+        return builder.addInterceptor(DevScopeInterceptor(context))
+    }
+}
+\`\`\`
+
+\`${mod}/src/release/java/dev/devscope/DevScope.kt\` (no-op) — and an identical copy in the source set of every other non-debug build type this module declares (e.g. \`staging\`):
+\`\`\`kotlin
+package dev.devscope
+
+import android.content.Context
+import okhttp3.OkHttpClient
+
+object DevScope {
+    fun install(context: Context, builder: OkHttpClient.Builder): OkHttpClient.Builder = builder
+}
+\`\`\`
+
+Then, where the OkHttpClient used by Retrofit/API calls is built, call \`DevScope.install(context, builder)\` as the LAST step before \`.build()\` (after auth/logging interceptors). \`context\` can be any Context whose \`applicationContext\` is the \`Application\` (needed to track the resumed Activity for the layout tree). If the client comes from a DI graph (Dagger/Hilt/Koin), inject a Context into that provider. If several clients exist, install it on the one(s) carrying the API traffic you want to see.
+
+## 3. Allow cleartext to localhost in debug builds
+OkHttp must be allowed plain HTTP/WebSocket to \`localhost\` and \`10.0.2.2\` (only those hosts).
+
+If the app has NO network security config, create \`${mod}/src/debug/res/xml/devscope_network_security_config.xml\`:
+\`\`\`xml
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors><certificates src="system" /></trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>
+\`\`\`
+and \`${mod}/src/debug/AndroidManifest.xml\`:
+\`\`\`xml
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/devscope_network_security_config" />
+</manifest>
+\`\`\`
+
+If a network security config ALREADY exists, do not add a second one: copy it into the debug \`res/xml/\` under the same file name (so debug overrides it) and add the \`<domain-config cleartextTrafficPermitted="true">\` block above to that copy. Note that \`android:usesCleartextTraffic="true"\` is ignored once a network security config exists.
+
+## 4. Verify
+1. \`./gradlew :${mod}:assembleDebug\` and the release variant (\`assembleRelease\` or whatever this project uses) both compile.
+2. Install and launch the debug app on an emulator/device while DevScope is open. Expected: requests appear in the Network tab within a second, Layout → Capture shows the tree, and \`adb logcat -s DevScope\` prints "layout agent connected".
+3. Confirm no \`dev.devscope\` class is in the release APK.
+
+## Rules
+- Keep the change minimal and isolated; do not refactor unrelated code.
+- Do not add Gradle dependencies unless compilation proves one is missing, and tell me before touching build files.
+- Do not commit. When done, list every file you created or changed and anything you had to adapt.
+`;
+  if (!canEmbed) return head;
+  const files = SETUP_FILES.map((f) => `\n## File: ${dbg}/${f}\n\`\`\`kotlin\n${setupSources[f].trimEnd()}\n\`\`\`\n`).join("");
+  return head + "\n---\n# Files to create verbatim\n" + files;
+}
+
+let setupPromptText = "";
+async function renderSetupPrompt() {
+  await loadSetupSources();
+  const embed = $("#setupEmbed").checked;
+  setupPromptText = buildSetupPrompt({ embed, module: $("#setupModule").value });
+  $("#setupPrompt").textContent = setupPromptText;
+  const kb = (new Blob([setupPromptText]).size / 1024).toFixed(1);
+  const missing = embed && !SETUP_FILES.every((f) => setupSources[f]);
+  $("#setupMeta").textContent = `${setupPromptText.split("\n").length} lines · ${kb} KB` + (missing ? " · sources unavailable, prompt tells the agent to curl them" : "");
+}
+// Inside the desktop app the page is an iframe: hand the text to the shell, which writes
+// the system clipboard through Electron (no focus/permission caveats). Browsers use the async API.
+function copyViaShell(text) {
+  if (window.parent === window) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const id = Math.random().toString(36).slice(2);
+    const done = (ok) => { window.removeEventListener("message", onMsg); clearTimeout(t); resolve(ok); };
+    const onMsg = (ev) => { if (ev.source === window.parent && ev.data?.type === "devscope:copied" && ev.data.id === id) done(!!ev.data.ok); };
+    const t = setTimeout(() => done(false), 500);
+    window.addEventListener("message", onMsg);
+    window.parent.postMessage({ type: "devscope:copy", id, text }, "*");
+  });
+}
+async function copyText(text) {
+  if (await copyViaShell(text)) return true;
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  const ok = document.execCommand("copy");
+  ta.remove();
+  return ok;
+}
+function openSetup() { renderSetupPrompt(); $("#setupDlg").showModal(); }
+$("#setup").onclick = openSetup;
+document.addEventListener("click", (ev) => {
+  const a = ev.target.closest("[data-setup]");
+  if (a) { ev.preventDefault(); openSetup(); }
+});
+$("#setupDlg").querySelectorAll("[data-close]").forEach((b) => b.onclick = () => $("#setupDlg").close());
+$("#setupDlg").onclick = (ev) => { if (ev.target === $("#setupDlg")) $("#setupDlg").close(); };
+$("#setupEmbed").onchange = renderSetupPrompt;
+$("#setupModule").oninput = renderSetupPrompt;
+$("#setupCopy").onclick = async () => {
+  const ok = await copyText(setupPromptText);
+  const b = $("#setupCopy");
+  if (!ok) { const sel = window.getSelection(); sel.removeAllRanges(); sel.selectAllChildren($("#setupPrompt")); }
+  b.textContent = ok ? "Copied ✓" : "Copy blocked — text selected, press ⌘C / Ctrl+C";
+  setTimeout(() => { b.textContent = "Copy prompt"; }, 1800);
+};
 </script>
 </body>
 </html>
