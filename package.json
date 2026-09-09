@@ -1,0 +1,61 @@
+{
+  "name": "devscope",
+  "version": "0.1.0",
+  "description": "Web-based device inspector (Flipper-style): detects Android emulators via adb and streams network traffic live.",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "demo": "node server/demo.js",
+    "desktop": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3"
+  },
+  "main": "desktop/main.js",
+  "productName": "DevScope",
+  "author": "DevScope",
+  "build": {
+    "appId": "dev.devscope.desktop",
+    "productName": "DevScope",
+    "asar": false,
+    "files": [
+      "desktop/**",
+      "server/**",
+      "public/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.icns",
+      "identity": null
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development",
+      "icon": "build/icon.png"
+    }
+  }
+}

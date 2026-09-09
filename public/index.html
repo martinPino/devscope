@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DevScope</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #1e232c; --panel: #252b36; --line: #343c4a; --hover: #2c3340;
+    --text: #e4e8ee; --muted: #8a94a6; --accent: #f0b429; --accent-ink: #1e232c;
+    --get: #5abfa0; --post: #6aa6f5; --put: #c99af0; --patch: #e0a86a; --delete: #ef7a7a;
+    --ok: #5abfa0; --warn: #f0b429; --err: #ef7a7a;
+    --sans: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 var(--sans); overflow: hidden; }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; background: none; border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; }
+  button:hover { background: var(--hover); }
+  button:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .mono { font-family: var(--mono); }
+
+  #app { display: grid; grid-template-columns: 240px 1fr; grid-template-rows: 44px 1fr; height: 100vh; }
+  header { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0 8px 0 0; letter-spacing: -0.01em; }
+  #adb { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--ok); } .dot.off { background: var(--err); }
+  header .spacer { flex: 1; }
+  #filter { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 5px 10px; width: 280px; }
+  #filter::placeholder { color: var(--muted); }
+  #search { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 5px 10px; width: 230px; }
+  #search::placeholder { color: var(--muted); }
+  #search.active { border-color: var(--accent); }
+  #matches { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  mark { background: var(--accent); color: var(--accent-ink); border-radius: 2px; padding: 0 1px; }
+  mark.current { box-shadow: 0 0 0 2px var(--text); }
+  .live { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .live .dot { background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .live .dot { animation: none; } }
+
+  aside { border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 12px 0; }
+  aside h2 { font-size: 12px; font-weight: 500; color: var(--muted); margin: 0 16px 8px; }
+  .device { display: block; width: 100%; text-align: left; border: 0; border-left: 3px solid transparent; border-radius: 0; padding: 10px 16px 10px 13px; }
+  .device.selected { border-left-color: var(--accent); background: var(--hover); }
+  .device .name { font-weight: 500; display: flex; justify-content: space-between; gap: 8px; }
+  .device .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--line); color: var(--text); }
+  .tag.virtual { background: #3b3a2b; color: var(--accent); }
+  .empty { color: var(--muted); padding: 8px 16px; font-size: 12px; }
+  .empty code { font-family: var(--mono); color: var(--text); }
+
+  main { display: grid; grid-template-columns: minmax(420px, 1fr) minmax(360px, 46%); min-height: 0; }
+  #list { overflow-y: auto; border-right: 1px solid var(--line); }
+  table { width: 100%; border-collapse: collapse; }
+  thead th { position: sticky; top: 0; background: var(--bg); text-align: left; font-weight: 500; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 12px; }
+  tbody td { padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: middle; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--hover); }
+  tbody tr.selected { background: var(--hover); box-shadow: inset 3px 0 0 var(--accent); }
+  td.url { max-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 12px; }
+  td.url .host { color: var(--muted); }
+  .m { font-family: var(--mono); font-size: 11px; font-weight: 500; }
+  .m-GET { color: var(--get); } .m-POST { color: var(--post); } .m-PUT { color: var(--put); } .m-PATCH { color: var(--patch); } .m-DELETE { color: var(--delete); }
+  .s { font-family: var(--mono); font-size: 12px; }
+  .s-2 { color: var(--ok); } .s-3 { color: var(--muted); } .s-4 { color: var(--warn); } .s-5, .s-x { color: var(--err); }
+  td.time { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .bar { display: inline-block; height: 6px; background: var(--muted); border-radius: 1px; vertical-align: middle; margin-right: 6px; min-width: 2px; }
+  .bar.slow { background: var(--warn); }
+  #list .empty { padding: 40px 24px; text-align: center; line-height: 1.7; }
+
+  #detail { overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+  #detail .head { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  #detail .head .line1 { display: flex; gap: 10px; align-items: baseline; }
+  #detail .head .u { font-family: var(--mono); font-size: 12px; word-break: break-all; margin-top: 4px; }
+  #detail .head .stats { color: var(--muted); font-size: 12px; margin-top: 6px; display: flex; gap: 16px; }
+  .tabs { display: flex; border-bottom: 1px solid var(--line); padding: 0 8px; }
+  .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 10px; color: var(--muted); }
+  .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tabs button:hover { background: none; color: var(--text); }
+  .tabs .tabcount { background: var(--accent); color: var(--accent-ink); border-radius: 8px; padding: 0 5px; font-size: 10px; margin-left: 4px; }
+  #pane { overflow: auto; padding: 12px 16px; flex: 1; }
+  #pane h3 { font-size: 12px; color: var(--muted); font-weight: 500; margin: 14px 0 6px; }
+  #pane h3:first-child { margin-top: 0; }
+  pre { margin: 0; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-family: var(--mono); font-size: 12px; }
+  .kv .k { color: var(--muted); }
+  .kv .v { word-break: break-all; }
+  .j-k { color: var(--post); } .j-s { color: var(--get); } .j-n { color: var(--put); } .j-b { color: var(--patch); } .j-null { color: var(--muted); }
+  .err { color: var(--err); }
+
+  .pages { display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px; }
+  .pages button { border: 0; padding: 3px 10px; border-radius: 3px; color: var(--muted); }
+  .pages button.active { background: var(--hover); color: var(--text); }
+  main > section[hidden] { display: none !important; } /* must beat #detail { display: flex } */
+
+  #ltree { overflow: auto; border-right: 1px solid var(--line); padding-bottom: 12px; }
+  #ltree .toolbar { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); margin-bottom: 6px; position: sticky; top: 0; background: var(--bg); z-index: 1; }
+  #ltree .toolbar .who { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #ltree .toolbar .live-toggle { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; cursor: pointer; user-select: none; }
+  #ltree .toolbar .live-toggle input { accent-color: var(--accent); margin: 0; }
+  #ltree .empty { padding: 40px 24px; text-align: center; line-height: 1.7; }
+  .lnode { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  .lnode .row { display: flex; align-items: center; gap: 5px; padding: 2px 8px; cursor: pointer; }
+  .lnode .row:hover { background: var(--hover); }
+  .lnode .row.selected { background: var(--hover); box-shadow: inset 2px 0 0 var(--accent); }
+  .caret { width: 12px; flex: none; color: var(--muted); user-select: none; }
+  .t-view { color: var(--post); } .t-compose { color: var(--get); }
+  .lnode .meta { color: var(--muted); } .lnode .txt { color: var(--text); opacity: .85; }
+  .lnode .row.dim { opacity: .45; }
+  #lside { overflow: auto; }
+  #shot { position: relative; margin: 14px auto 10px; width: fit-content; max-width: calc(100% - 32px); }
+  #shot img { display: block; max-width: 100%; max-height: 52vh; border: 1px solid var(--line); border-radius: 4px; }
+  #shot .hl { position: absolute; border: 1.5px solid var(--accent); background: rgba(240, 180, 41, .18); pointer-events: none; display: none; }
+  #lprops { padding: 4px 16px 16px; }
+  #lprops h3 { font-size: 12px; color: var(--muted); font-weight: 500; margin: 10px 0 6px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } #detail, #lside { display: none; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>DevScope</h1>
+    <nav class="pages">
+      <button data-page="network" class="active">Network</button>
+      <button data-page="layout">Layout</button>
+    </nav>
+    <span id="adb"><span class="dot"></span><span>connecting…</span></span>
+    <span class="spacer"></span>
+    <input id="filter" placeholder="Filter by URL, method or status (e.g. POST 500 /checkout)" aria-label="Filter requests">
+    <input id="search" placeholder="Search in bodies (⌘F)" aria-label="Search inside request and response bodies">
+    <span id="matches" hidden></span>
+    <span class="live"><span class="dot"></span><span id="count">0 requests</span></span>
+    <button id="clear">Clear</button>
+  </header>
+
+  <aside>
+    <h2>Devices</h2>
+    <div id="devices"></div>
+  </aside>
+
+  <main>
+    <section id="list"></section>
+    <section id="detail"></section>
+    <section id="ltree" hidden></section>
+    <section id="lside" hidden>
+      <div id="shot"><img alt="Device screenshot"><div class="hl"></div></div>
+      <div id="lprops"></div>
+    </section>
+  </main>
+</div>
+
+<script>
+const state = {
+  adb: null, devices: [], events: [], selectedDevice: null, selectedEvent: null,
+  tab: "response", filter: "", search: "", page: "network",
+  ws: null, agents: [], layouts: {}, selectedNode: null, collapsed: new Set(), capturing: false,
+  live: true, shotAt: 0, shotTimer: null,
+};
+const $ = (s) => document.querySelector(s);
+
+// ---------- websocket ----------
+function connect() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  state.ws = ws;
+  ws.onmessage = (m) => {
+    const msg = JSON.parse(m.data);
+    if (msg.type === "hello") {
+      state.adb = msg.adbAvailable; state.devices = msg.devices; state.events = msg.events;
+      state.agents = msg.agents ?? []; state.layouts = msg.layouts ?? {};
+      renderAll(); sendWatch();
+    }
+    else if (msg.type === "devices") { state.devices = msg.devices; renderDevices(); renderList(); renderLayout(); sendWatch(); }
+    else if (msg.type === "adb") { state.adb = msg.available; renderAdb(); renderDevices(); }
+    else if (msg.type === "network") { state.events.push(msg.event); if (state.events.length > 2000) state.events.shift(); renderList(); }
+    else if (msg.type === "clear") { state.events = []; state.selectedEvent = null; renderList(); renderDetail(); }
+    else if (msg.type === "agents") { state.agents = msg.agents; renderLayout(); sendWatch(); }
+    else if (msg.type === "layout") {
+      const prev = state.layouts[msg.layout.serial];
+      state.layouts[msg.layout.serial] = msg.layout;
+      state.capturing = false;
+      // Live updates keep selection and folds; a new activity means new paths, so reset.
+      if (prev?.activity !== msg.layout.activity) { state.selectedNode = null; state.collapsed = new Set(); }
+      renderLayout();
+    }
+    else if (msg.type === "layout.error") { state.capturing = false; state.layoutError = msg.error; renderLayout(); }
+  };
+  ws.onclose = () => { state.adb = null; renderAdb(); setTimeout(connect, 1500); };
+}
+connect();
+
+// ---------- render ----------
+function renderAll() { renderAdb(); renderDevices(); renderList(); renderDetail(); renderLayout(); }
+
+function renderAdb() {
+  const el = $("#adb");
+  const cls = state.adb === null ? "" : state.adb ? "on" : "off";
+  const txt = state.adb === null ? "server offline" : state.adb ? "adb connected" : "adb not found";
+  el.innerHTML = `<span class="dot ${cls}"></span><span>${txt}</span>`;
+}
+
+function renderDevices() {
+  const box = $("#devices");
+  if (!state.devices.length) {
+    box.innerHTML = state.adb === false
+      ? `<p class="empty">adb is not on the PATH. Start the server with <code>ADB=/path/to/adb npm start</code>.</p>`
+      : `<p class="empty">No devices. Start an emulator or plug in a phone with USB debugging on.</p>`;
+    return;
+  }
+  const all = `<button class="device ${state.selectedDevice === null ? "selected" : ""}" data-serial="">
+      <div class="name">All devices</div><div class="meta">${state.devices.length} connected</div></button>`;
+  box.innerHTML = all + state.devices.map((d) => `
+    <button class="device ${state.selectedDevice === d.serial ? "selected" : ""}" data-serial="${d.serial}">
+      <div class="name"><span>${esc(d.avdName || d.model)}</span><span class="tag ${d.type}">${d.type}</span></div>
+      <div class="meta">${d.state !== "device" ? esc(d.state) : `Android ${esc(d.release)} · API ${esc(d.sdk)}`} · <span class="mono">${esc(d.serial)}</span></div>
+      ${d.state === "device" && !d.reverse ? `<div class="meta err">adb reverse failed — app must use 10.0.2.2</div>` : ""}
+    </button>`).join("");
+  box.querySelectorAll(".device").forEach((b) => b.onclick = () => { state.selectedDevice = b.dataset.serial || null; renderDevices(); renderList(); renderLayout(); sendWatch(); });
+}
+
+// ---------- layout inspector ----------
+function layoutSerial() {
+  if (state.selectedDevice) return state.selectedDevice;
+  const withAgent = state.devices.find((d) => state.agents.includes(d.serial));
+  return (withAgent ?? state.devices[0])?.serial ?? null;
+}
+
+function pathNode(path) {
+  const lay = state.layouts[layoutSerial()];
+  if (!lay || path == null) return null;
+  let n = lay.tree;
+  for (const i of String(path).split(".").slice(1)) { n = (n?.children ?? [])[+i]; if (!n) return null; }
+  return n;
+}
+
+function nodeLabel(n) {
+  return `<span class="t-${n.kind}">${esc(n.type)}</span>` +
+    (n.id ? `<span class="meta">#${esc(n.id)}</span>` : "") +
+    (n.text ? ` <span class="txt">“${esc(String(n.text).slice(0, 48))}”</span>` : "") +
+    (!n.text && n.desc ? ` <span class="txt">(${esc(String(n.desc).slice(0, 48))})</span>` : "");
+}
+
+function nodeHtml(n, path, depth) {
+  const kids = n.children ?? [];
+  const closed = state.collapsed.has(path);
+  return `<div class="lnode">
+    <div class="row ${state.selectedNode === path ? "selected" : ""} ${n.hidden ? "dim" : ""}" data-path="${path}" style="padding-left:${8 + depth * 14}px">
+      <span class="caret" ${kids.length ? `data-toggle="${path}"` : ""}>${kids.length ? (closed ? "▸" : "▾") : ""}</span>${nodeLabel(n)}
+    </div>
+    ${closed ? "" : kids.map((k, i) => nodeHtml(k, `${path}.${i}`, depth + 1)).join("")}
+  </div>`;
+}
+
+function renderLayout() {
+  if (state.page !== "layout") return;
+  const box = $("#ltree");
+  const serial = layoutSerial();
+  const dev = state.devices.find((d) => d.serial === serial);
+  const hasAgent = !!dev && state.agents.includes(dev.serial);
+  const lay = serial ? state.layouts[serial] : null;
+  const status = state.capturing ? "Capturing…"
+    : state.layoutError ? `<span class="err">${esc(state.layoutError)}</span>`
+    : lay ? `${esc(lay.activity ?? "")} · ${new Date(lay.capturedAt).toLocaleTimeString()}`
+    : hasAgent ? "Ready" : "No layout agent — launch a debug build with DevScope";
+  const scrollTop = box.scrollTop;
+  box.innerHTML = `<div class="toolbar">
+      <button id="capture" ${hasAgent && !state.capturing ? "" : "disabled"}>Capture</button>
+      <label class="live-toggle" title="Re-capture automatically whenever the app's layout changes">
+        <input type="checkbox" id="live" ${state.live ? "checked" : ""}> Live
+      </label>
+      <span class="who">${status}</span>
+    </div>` +
+    (lay ? markMatches(nodeHtml(lay.tree, "0", 0), state.search.trim())
+         : `<div class="empty">${dev ? "Press Capture to dump the view/composable tree of the foreground app." : "No device connected."}</div>`);
+  box.scrollTop = scrollTop;
+  $("#capture")?.addEventListener("click", captureLayout);
+  $("#live").onchange = (ev) => { state.live = ev.target.checked; sendWatch(); if (state.live) captureLayout(); };
+  box.querySelectorAll(".row").forEach((r) => {
+    r.onclick = (ev) => {
+      const toggle = ev.target.dataset?.toggle;
+      if (toggle != null) {
+        state.collapsed.has(toggle) ? state.collapsed.delete(toggle) : state.collapsed.add(toggle);
+        renderLayout();
+        return;
+      }
+      state.selectedNode = r.dataset.path;
+      box.querySelectorAll(".row").forEach((x) => x.classList.toggle("selected", x === r));
+      renderProps();
+      showHl(pathNode(r.dataset.path));
+    };
+    r.onmouseenter = () => showHl(pathNode(r.dataset.path));
+  });
+  box.onmouseleave = () => showHl(pathNode(state.selectedNode));
+  // Screenshots are a full `adb screencap` each, so refresh at most every 800 ms
+  // and let the last live update through once the burst settles.
+  const img = $("#shot img");
+  const key = lay ? `${serial}-${lay.capturedAt}` : "";
+  if (lay && img.dataset.cap !== key) {
+    const wait = 800 - (Date.now() - state.shotAt);
+    if (wait <= 0) {
+      img.dataset.cap = key;
+      state.shotAt = Date.now();
+      img.src = `/api/screenshot/${encodeURIComponent(serial)}?t=${lay.capturedAt}`;
+    } else {
+      clearTimeout(state.shotTimer);
+      state.shotTimer = setTimeout(renderLayout, wait);
+    }
+  }
+  renderProps();
+}
+
+function sendWatch() {
+  if (state.ws?.readyState !== 1) return;
+  const serial = layoutSerial();
+  const on = state.page === "layout" && state.live && serial;
+  state.ws.send(JSON.stringify(on ? { type: "layout.watch", serial } : { type: "layout.unwatch" }));
+}
+
+function renderProps() {
+  if (state.page !== "layout") return;
+  const box = $("#lprops");
+  const n = pathNode(state.selectedNode);
+  if (!n) { box.innerHTML = `<p class="empty" style="padding:8px 0">Select a node — hovering highlights it on the screenshot.</p>`; return; }
+  const rows = {
+    kind: n.kind === "compose" ? "composable (semantics)" : "view",
+    type: n.type, id: n.id, text: n.text, desc: n.desc,
+    bounds: n.bounds ? `x:${n.bounds[0]}  y:${n.bounds[1]}  w:${n.bounds[2]}  h:${n.bounds[3]}` : null,
+    visible: n.hidden ? "no" : "yes",
+    children: (n.children ?? []).length || null,
+  };
+  const defined = Object.fromEntries(Object.entries(rows).filter(([, v]) => v != null && v !== ""));
+  box.innerHTML = `<h3>Node</h3>${kv(defined)}`;
+}
+
+function showHl(n) {
+  const img = $("#shot img");
+  const hl = $("#shot .hl");
+  if (!n || !n.bounds || !img.naturalWidth || !img.clientWidth) { hl.style.display = "none"; return; }
+  const s = img.clientWidth / img.naturalWidth;
+  const [x, y, w, h] = n.bounds;
+  hl.style.display = "block";
+  hl.style.left = x * s + "px";
+  hl.style.top = y * s + "px";
+  hl.style.width = Math.max(1, w * s) + "px";
+  hl.style.height = Math.max(1, h * s) + "px";
+}
+
+function captureLayout() {
+  const serial = layoutSerial();
+  if (!serial || state.ws?.readyState !== 1) return;
+  state.capturing = true;
+  state.layoutError = null;
+  state.ws.send(JSON.stringify({ type: "layout.capture", serial }));
+  renderLayout();
+}
+
+function visibleEvents() {
+  const f = state.filter.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const s = state.search.trim().toLowerCase();
+  return state.events.filter((e) => {
+    if (state.selectedDevice && e.device !== state.selectedDevice) return false;
+    if (s && !`${e.responseBody ?? ""}\n${e.requestBody ?? ""}`.toLowerCase().includes(s)) return false;
+    if (!f.length) return true;
+    const hay = `${e.method} ${e.status ?? "err"} ${e.url} ${e.appId ?? ""}`.toLowerCase();
+    return f.every((t) => hay.includes(t));
+  });
+}
+
+function renderList() {
+  const list = $("#list");
+  const evs = visibleEvents();
+  $("#count").textContent = `${evs.length} request${evs.length === 1 ? "" : "s"}`;
+  if (!evs.length) {
+    list.innerHTML = `<div class="empty">${state.events.length ? "Nothing matches this filter." :
+      "Waiting for traffic.<br>Add <span class=\"mono\">DevScopeInterceptor</span> to your OkHttpClient, or run <span class=\"mono\">npm run demo</span> to see sample requests."}</div>`;
+    return;
+  }
+  const maxDur = Math.max(200, ...evs.map((e) => e.durationMs || 0));
+  const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+  list.innerHTML = `<table><thead><tr><th style="width:56px">Method</th><th style="width:52px">Status</th><th>URL</th><th style="width:140px">Time</th><th style="width:70px">Size</th></tr></thead><tbody>${
+    evs.map((e) => {
+      const u = splitUrl(e.url);
+      const dur = e.durationMs ?? 0;
+      return `<tr data-id="${e.id}" class="${state.selectedEvent?.id === e.id ? "selected" : ""}">
+        <td><span class="m m-${e.method}">${e.method}</span></td>
+        <td>${statusHtml(e)}</td>
+        <td class="url" title="${esc(e.url)}"><span class="host">${esc(u.host)}</span>${esc(u.path)}</td>
+        <td class="time"><span class="bar ${dur > 1000 ? "slow" : ""}" style="width:${Math.max(2, 70 * dur / maxDur)}px"></span>${e.durationMs != null ? dur + " ms" : "–"}</td>
+        <td class="time">${fmtSize(e.responseSize)}</td></tr>`;
+    }).join("")}</tbody></table>`;
+  list.querySelectorAll("tbody tr").forEach((r) => r.onclick = () => selectEvent(r.dataset.id));
+  if (atBottom) list.scrollTop = list.scrollHeight;
+}
+
+function selectEvent(id) {
+  state.selectedEvent = state.events.find((e) => e.id === id) || null;
+  $("#list").querySelectorAll("tbody tr").forEach((r) => r.classList.toggle("selected", r.dataset.id === id));
+  renderDetail();
+}
+
+function renderDetail() {
+  const d = $("#detail");
+  const e = state.selectedEvent;
+  if (!e) { d.innerHTML = `<div class="empty" style="padding:40px 24px;text-align:center">Select a request to inspect it.</div>`; return; }
+  const dev = state.devices.find((x) => x.serial === e.device);
+  d.innerHTML = `
+    <div class="head">
+      <div class="line1"><span class="m m-${e.method}" style="font-size:13px">${e.method}</span>${statusHtml(e)}</div>
+      <div class="u">${esc(e.url)}</div>
+      <div class="stats">
+        <span>${e.durationMs != null ? e.durationMs + " ms" : "–"}</span>
+        <span>${fmtSize(e.responseSize)}</span>
+        <span>${new Date(e.startedAt).toLocaleTimeString()}</span>
+        ${e.appId ? `<span class="mono">${esc(e.appId)}</span>` : ""}
+        <span>${esc(dev ? (dev.avdName || dev.model) : e.deviceModel || "unknown device")}</span>
+      </div>
+    </div>
+    <div class="tabs">
+      ${["response", "request", "headers"].map((t) => {
+        const n = tabMatchCounts(e)?.[t] ?? 0;
+        return `<button data-tab="${t}" class="${state.tab === t ? "active" : ""}">${t[0].toUpperCase() + t.slice(1)}${n ? `<span class="tabcount">${n}</span>` : ""}</button>`;
+      }).join("")}
+    </div>
+    <div id="pane">${markMatches(paneHtml(e), state.search.trim())}</div>`;
+  d.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => { state.tab = b.dataset.tab; renderDetail(); });
+  updateMatches();
+}
+
+function paneHtml(e) {
+  if (state.tab === "headers") {
+    return `<h3>Request headers</h3>${kv(e.requestHeaders)}<h3>Response headers</h3>${kv(e.responseHeaders)}`;
+  }
+  if (state.tab === "request") {
+    const q = queryParams(e.url);
+    return `${q ? `<h3>Query parameters</h3>${kv(q)}` : ""}<h3>Body</h3>${body(e.requestBody)}`;
+  }
+  return `${e.error ? `<pre class="err">${esc(e.error)}</pre>` : ""}<h3>Body</h3>${body(e.responseBody)}`;
+}
+
+// ---------- helpers ----------
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+// Wraps every case-insensitive occurrence of `term` in <mark>, walking text nodes
+// so the already-generated syntax-highlight spans are left intact.
+function markMatches(html, term) {
+  if (!term) return html;
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  const needle = term.toLowerCase();
+  for (const node of nodes) {
+    const text = node.nodeValue;
+    let i = text.toLowerCase().indexOf(needle);
+    if (i === -1) continue;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    while (i !== -1) {
+      frag.appendChild(document.createTextNode(text.slice(last, i)));
+      const m = document.createElement("mark");
+      m.textContent = text.slice(i, i + term.length);
+      frag.appendChild(m);
+      last = i + term.length;
+      i = text.toLowerCase().indexOf(needle, last);
+    }
+    frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  }
+  return tpl.innerHTML;
+}
+function splitUrl(url) { try { const u = new URL(url); return { host: u.host, path: u.pathname + u.search }; } catch { return { host: "", path: url }; } }
+function queryParams(url) { try { const p = Object.fromEntries(new URL(url).searchParams); return Object.keys(p).length ? p : null; } catch { return null; } }
+function statusHtml(e) {
+  if (e.error) return `<span class="s s-x">ERR</span>`;
+  if (e.status == null) return `<span class="s s-3">…</span>`;
+  return `<span class="s s-${String(e.status)[0]}">${e.status}</span>`;
+}
+function fmtSize(n) { if (n == null) return "–"; if (n < 1024) return n + " B"; if (n < 1048576) return (n / 1024).toFixed(1) + " KB"; return (n / 1048576).toFixed(2) + " MB"; }
+function kv(obj) {
+  const keys = Object.keys(obj || {});
+  if (!keys.length) return `<p class="empty" style="padding:0">none</p>`;
+  return `<div class="kv">${keys.map((k) => `<span class="k">${esc(k)}</span><span class="v">${esc(obj[k])}</span>`).join("")}</div>`;
+}
+function body(raw) {
+  if (raw == null || raw === "") return `<p class="empty" style="padding:0">empty</p>`;
+  try { return `<pre>${highlight(JSON.stringify(JSON.parse(raw), null, 2))}</pre>`; } catch { return `<pre>${esc(raw)}</pre>`; }
+}
+function highlight(json) {
+  return esc(json).replace(/("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g, (m) => {
+    let c = "j-n";
+    if (m.startsWith('"')) c = m.endsWith(":") ? "j-k" : "j-s";
+    else if (m === "true" || m === "false") c = "j-b";
+    else if (m === "null") c = "j-null";
+    return `<span class="${c}">${m}</span>`;
+  });
+}
+
+// ---------- body search matches ----------
+function countIn(s, needle) {
+  if (!s) return 0;
+  const hay = String(s).toLowerCase();
+  let n = 0, i = hay.indexOf(needle);
+  while (i !== -1) { n++; i = hay.indexOf(needle, i + needle.length); }
+  return n;
+}
+function tabMatchCounts(e) {
+  const term = state.search.trim().toLowerCase();
+  if (!term) return null;
+  return {
+    response: countIn(e.error, term) + countIn(e.responseBody, term),
+    request: countIn(e.requestBody, term) + countIn(e.url.split("?")[1], term),
+    headers: countIn(JSON.stringify(e.requestHeaders ?? {}), term) + countIn(JSON.stringify(e.responseHeaders ?? {}), term),
+  };
+}
+let matchIdx = -1;
+function paneMarks() { return document.querySelectorAll("#pane mark"); }
+function updateMatches() {
+  const el = $("#matches");
+  const marks = paneMarks();
+  matchIdx = -1;
+  if (!state.search.trim() || !state.selectedEvent) { el.hidden = true; return; }
+  el.hidden = false;
+  if (!marks.length) { el.textContent = "0 matches"; return; }
+  matchIdx = 0;
+  marks[0].classList.add("current");
+  marks[0].scrollIntoView({ block: "center" });
+  el.textContent = `1/${marks.length} matches`;
+}
+function jumpMatch(dir) {
+  const marks = paneMarks();
+  if (!marks.length) return;
+  matchIdx = (matchIdx + dir + marks.length) % marks.length;
+  marks.forEach((m, i) => m.classList.toggle("current", i === matchIdx));
+  marks[matchIdx].scrollIntoView({ block: "center" });
+  $("#matches").textContent = `${matchIdx + 1}/${marks.length} matches`;
+}
+
+// ---------- controls ----------
+document.querySelectorAll(".pages button").forEach((b) => b.onclick = () => {
+  state.page = b.dataset.page;
+  document.querySelectorAll(".pages button").forEach((x) => x.classList.toggle("active", x === b));
+  const layout = state.page === "layout";
+  $("#list").hidden = layout; $("#detail").hidden = layout;
+  $("#ltree").hidden = !layout; $("#lside").hidden = !layout;
+  renderLayout();
+  sendWatch();
+  if (layout && layoutSerial() && !state.layouts[layoutSerial()]) captureLayout();
+});
+$("#shot img").addEventListener("load", () => showHl(pathNode(state.selectedNode)));
+$("#filter").oninput = (ev) => { state.filter = ev.target.value; renderList(); };
+let searchTimer;
+$("#search").oninput = (ev) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    state.search = ev.target.value;
+    $("#search").classList.toggle("active", !!state.search.trim());
+    renderList(); renderDetail(); renderLayout();
+  }, 120);
+};
+$("#search").onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); jumpMatch(ev.shiftKey ? -1 : 1); } };
+$("#clear").onclick = () => fetch("/api/events", { method: "DELETE" });
+document.addEventListener("keydown", (ev) => {
+  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "f") { ev.preventDefault(); $("#search").focus(); $("#search").select(); }
+  if (ev.key === "/" && document.activeElement !== $("#filter") && document.activeElement !== $("#search")) { ev.preventDefault(); $("#filter").focus(); }
+  if (ev.key === "Escape") {
+    $("#filter").value = ""; state.filter = "";
+    $("#search").value = ""; state.search = ""; $("#search").classList.remove("active");
+    renderList(); renderDetail(); renderLayout();
+  }
+  if ((ev.key === "ArrowDown" || ev.key === "ArrowUp") && document.activeElement.tagName !== "INPUT") {
+    const evs = visibleEvents(); if (!evs.length) return;
+    const i = evs.findIndex((e) => e.id === state.selectedEvent?.id);
+    const next = evs[Math.min(evs.length - 1, Math.max(0, i + (ev.key === "ArrowDown" ? 1 : -1)))];
+    selectEvent(next.id); ev.preventDefault();
+    $("#list").querySelector(`tr[data-id="${next.id}"]`)?.scrollIntoView({ block: "nearest" });
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-src http://localhost:* http://127.0.0.1:*; img-src 'self' data:;">
+<title>DevScope</title>
+<style>
+  :root {
+    --bg: #1e232c; --panel: #252b36; --line: #343c4a; --hover: #2c3340;
+    --text: #e4e8ee; --muted: #8a94a6; --accent: #f0b429; --accent-ink: #1e232c;
+    --ok: #5abfa0; --err: #ef7a7a;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 var(--sans); display: flex; flex-direction: column; overflow: hidden; }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; background: none; border: 1px solid var(--line); border-radius: 5px; padding: 4px 11px; -webkit-app-region: no-drag; }
+  button:hover { background: var(--hover); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.primary:hover { filter: brightness(1.06); }
+  button.danger:hover { border-color: var(--err); color: var(--err); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  header { flex: none; height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 16px 0 var(--pad-left, 16px); border-bottom: 1px solid var(--line); background: var(--panel); -webkit-app-region: drag; user-select: none; }
+  body.mac header { --pad-left: 84px; }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .status { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.running { background: var(--ok); }
+  .dot.starting, .dot.stopping { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  .dot.error { background: var(--err); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .adb { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .adb code { font-family: var(--mono); color: var(--text); font-size: 11px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; }
+  .adb.missing code { color: var(--err); direction: ltr; }
+  .adb button { padding: 1px 7px; font-size: 11px; }
+  .spacer { flex: 1; }
+  label.check { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; -webkit-app-region: no-drag; cursor: pointer; }
+  label.check input { accent-color: var(--accent); margin: 0; }
+
+  main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  iframe { flex: 1; border: 0; width: 100%; background: var(--bg); }
+  #idle { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 40px; }
+  #idle .logo { width: 64px; height: 64px; border-radius: 16px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font: 700 26px var(--mono); margin-bottom: 6px; }
+  #idle h2 { margin: 0; font-size: 20px; font-weight: 600; }
+  #idle p { margin: 0; color: var(--muted); max-width: 460px; line-height: 1.6; }
+  #idle .big { padding: 9px 22px; font-size: 14px; }
+  #idle .err { color: var(--err); font-family: var(--mono); font-size: 12px; }
+  #idle .hint { font-size: 12px; }
+  #idle .hint code { font-family: var(--mono); color: var(--text); }
+  [hidden] { display: none !important; }
+
+  #logs { flex: none; height: 200px; border-top: 1px solid var(--line); background: #171b22; display: flex; flex-direction: column; }
+  #logs .head { display: flex; align-items: center; gap: 10px; padding: 4px 12px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); }
+  #logs .head button { padding: 1px 7px; font-size: 11px; }
+  #logs pre { flex: 1; margin: 0; padding: 8px 12px; overflow: auto; font: 11.5px/1.5 var(--mono); color: #c7cdd8; white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DevScope</h1>
+  <span class="status"><span class="dot" id="dot"></span><span id="statusText">Stopped</span></span>
+  <span class="adb" id="adb"><span>adb</span><code id="adbPath">–</code><button id="chooseAdb" title="Pick the adb executable manually">Change</button></span>
+  <span class="spacer"></span>
+  <label class="check"><input type="checkbox" id="autoStart"> Start on launch</label>
+  <button id="openExternal" title="Open the inspector in your browser" disabled>Open in browser ↗</button>
+  <button id="toggleLogs">Logs</button>
+  <button id="toggle" class="primary">Start server</button>
+</header>
+
+<main>
+  <iframe id="app" title="DevScope inspector" hidden></iframe>
+  <section id="idle">
+    <div class="logo">{ }</div>
+    <h2>Server is stopped</h2>
+    <p>Start the server to detect devices through adb and stream your app's network traffic and layout here. It runs on <span id="idlePort">localhost:8765</span> and sets up <code>adb reverse</code> for every device it sees.</p>
+    <button id="idleStart" class="primary big">Start server</button>
+    <p class="err" id="idleErr" hidden></p>
+    <p class="hint" id="adbHint" hidden>adb was not found. Install Android platform-tools or pick the executable with <strong>Change</strong> in the top bar.</p>
+  </section>
+  <aside id="logs" hidden>
+    <div class="head"><span>Server logs</span><span class="spacer"></span><button id="clearLogs">Clear</button><button id="closeLogs">Close</button></div>
+    <pre id="logBody"></pre>
+  </aside>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
