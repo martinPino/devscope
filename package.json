@@ -29,6 +29,7 @@
       "desktop/**",
       "server/**",
       "public/**",
+      "android/**",
       "package.json"
     ],
     "directories": {
