@@ -188,6 +188,12 @@ function scheduleScreenshot() {
 }
 
 // ---------- app ----------
+// Single instance: launching DevScope again just focuses the existing window.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
+}
 app.whenReady().then(() => {
   loadSettings();
   state.port = Number(settings.port) || DEFAULTS.port;
