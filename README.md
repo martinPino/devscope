@@ -122,6 +122,10 @@ The layout inspector shows the UIKit view hierarchy and, for SwiftUI, the access
 
 That's it. The server runs `adb reverse tcp:8765 tcp:8765` on every device it sees, so `localhost:8765` inside the device reaches your machine. Requests and agents are matched to devices through `ANDROID_ID` when it matches, otherwise to the only connected device (`ANDROID_ID` is per-app since Android 8, so it usually differs from the value `adb` reads).
 
+## Detail pane
+
+Select any part of a body or header with the mouse and copy it as usual. The **Copy** button (top right of the detail pane) copies the active tab as plain text — pretty-printed JSON for bodies, `Key: value` lines for headers — and **cURL** copies the request as a ready-to-run `curl` command with its headers and body. Drag the divider between the list and the detail pane to resize it (double-click resets).
+
 ## Search
 
 - **Filter** (top bar, `/`): matches method, status, URL and app id — narrows the request list.

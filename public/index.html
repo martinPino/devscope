@@ -81,7 +81,10 @@
 
   #detail { overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
   #detail .head { padding: 12px 16px; border-bottom: 1px solid var(--line); }
-  #detail .head .line1 { display: flex; gap: 10px; align-items: baseline; }
+  #detail .head .line1 { display: flex; gap: 10px; align-items: center; }
+  #detail .head .actions { margin-left: auto; display: flex; gap: 6px; }
+  #detail .head .actions button { padding: 2px 9px; font-size: 12px; white-space: nowrap; }
+  #pane, #pane pre, #pane .kv { user-select: text; cursor: text; }
   #detail .head .u { font-family: var(--mono); font-size: 12px; word-break: break-all; margin-top: 4px; }
   #detail .head .stats { color: var(--muted); font-size: 12px; margin-top: 6px; display: flex; gap: 16px; }
   .tabs { display: flex; border-bottom: 1px solid var(--line); padding: 0 8px; }
@@ -468,7 +471,12 @@ function renderDetail() {
   const dev = state.devices.find((x) => x.serial === e.device);
   d.innerHTML = `
     <div class="head">
-      <div class="line1"><span class="m m-${e.method}" style="font-size:13px">${e.method}</span>${statusHtml(e)}</div>
+      <div class="line1"><span class="m m-${e.method}" style="font-size:13px">${e.method}</span>${statusHtml(e)}
+        <span class="actions">
+          <button id="copyPane" title="Copy the ${state.tab} tab as text">Copy</button>
+          <button id="copyCurl" title="Copy this request as a curl command">cURL</button>
+        </span>
+      </div>
       <div class="u">${esc(e.url)}</div>
       <div class="stats">
         <span>${e.durationMs != null ? e.durationMs + " ms" : "–"}</span>
@@ -486,7 +494,37 @@ function renderDetail() {
     </div>
     <div id="pane">${markMatches(paneHtml(e), state.search.trim())}</div>`;
   d.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => { state.tab = b.dataset.tab; renderDetail(); });
+  $("#copyPane").onclick = (ev) => copyWithFeedback(ev.currentTarget, paneText(e), $("#pane"));
+  $("#copyCurl").onclick = (ev) => copyWithFeedback(ev.currentTarget, curlFor(e), null);
   updateMatches();
+}
+
+// Plain-text version of the active tab, for the Copy button.
+function paneText(e) {
+  const pretty = (raw) => { if (raw == null || raw === "") return ""; try { return JSON.stringify(JSON.parse(raw), null, 2); } catch { return String(raw); } };
+  const kvText = (obj) => Object.entries(obj || {}).map(([k, v]) => `${k}: ${v}`).join("\n") || "(none)";
+  if (state.tab === "headers") return `Request headers\n${kvText(e.requestHeaders)}\n\nResponse headers\n${kvText(e.responseHeaders)}`;
+  if (state.tab === "request") return pretty(e.requestBody) || e.url;
+  return pretty(e.responseBody) || (e.error ? String(e.error) : "");
+}
+
+function shellQuote(v) { return `'${String(v).replace(/'/g, `'\\''`)}'`; }
+function curlFor(e) {
+  const lines = [`curl -X ${e.method} ${shellQuote(e.url)}`];
+  for (const [k, v] of Object.entries(e.requestHeaders || {})) {
+    if (/^(content-length|host|accept-encoding|connection)$/i.test(k)) continue;
+    lines.push(`-H ${shellQuote(`${k}: ${v}`)}`);
+  }
+  if (e.requestBody && !/^<(binary|streamed)/.test(e.requestBody)) lines.push(`--data-raw ${shellQuote(e.requestBody)}`);
+  return lines.join(" \\\n  ");
+}
+
+async function copyWithFeedback(button, text, fallbackEl) {
+  const label = button.textContent;
+  const ok = await copyText(text);
+  if (!ok && fallbackEl) { const sel = window.getSelection(); sel.removeAllRanges(); sel.selectAllChildren(fallbackEl); }
+  button.textContent = ok ? "Copied ✓" : "Blocked — press ⌘C";
+  setTimeout(() => { button.textContent = label; }, 1600);
 }
 
 function paneHtml(e) {
@@ -574,15 +612,17 @@ function highlight(json) {
         const w = Math.min(rect.width - 320, Math.max(280, rect.right - e.clientX));
         apply(w);
       };
-      const up = () => {
-        sp.removeEventListener("pointermove", move);
-        sp.removeEventListener("pointerup", up);
+      // Listen on window so the drag always ends — even if the pointer is released outside the
+      // splitter or the window loses focus — otherwise `dragging` (user-select: none) would stick.
+      const stop = () => {
+        for (const t of ["pointermove"]) window.removeEventListener(t, move);
+        for (const t of ["pointerup", "pointercancel", "blur"]) window.removeEventListener(t, stop);
         main.classList.remove("dragging");
         const w = parseFloat(getComputedStyle(main).getPropertyValue("--detail-w"));
         try { if (w) localStorage.setItem(KEY, String(Math.round(w))); } catch {}
       };
-      sp.addEventListener("pointermove", move);
-      sp.addEventListener("pointerup", up);
+      window.addEventListener("pointermove", move);
+      for (const t of ["pointerup", "pointercancel", "blur"]) window.addEventListener(t, stop);
     };
     sp.ondblclick = () => { apply(null); try { localStorage.removeItem(KEY); } catch {} };
   });
