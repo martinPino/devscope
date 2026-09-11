@@ -15,14 +15,10 @@ xattr -dr com.apple.quarantine /Applications/DevScope.app
 **Or install with one command** — builds the app on your Mac (no Gatekeeper warning; needs Node.js 18+ and git) and installs it into `/Applications`. Run it again to update:
 
 ```bash
-# while the repo is private (uses the GitHub CLI you are logged in with)
-gh api repos/martinPino/devscope/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
-```
-
-```bash
-# once the repo is public
 curl -fsSL https://raw.githubusercontent.com/martinPino/devscope/main/install.sh | bash
 ```
+
+(With the GitHub CLI, `gh api repos/martinPino/devscope/contents/install.sh -H "Accept: application/vnd.github.raw" | bash` does the same.)
 
 From a checkout the same installer is `./install.sh` (or `npm run install:app`). Set `DEVSCOPE_DEST` to install somewhere other than `/Applications`.
 
