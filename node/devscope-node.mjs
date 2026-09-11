@@ -16,6 +16,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 const BASE = (process.env.DEVSCOPE_URL || "http://localhost:8765").replace(/\/+$/, "");
+// Package managers inherit NODE_OPTIONS too (pnpm run dev, npm install…); their registry
+// traffic is noise, so the hook stays inert in them and only instruments the app processes.
+const IS_PACKAGE_MANAGER = /(^|[\/\\])(pnpm|npm|npx|yarn|corepack|npm-cli|pnpm-cli)(\.c?js|\.mjs)?$/i.test(process.argv[1] || "");
 const MAX = 512 * 1024;
 const TEXT = /json|text|xml|javascript|x-www-form-urlencoded|graphql|event-stream/i;
 const own = (() => { try { return new URL(BASE); } catch { return null; } })();
@@ -60,7 +63,7 @@ function truncateText(s) { return s.length > MAX ? s.slice(0, MAX) + "\n… [tru
 
 // ---------- fetch (undici) ----------
 const origFetch = globalThis.fetch;
-if (typeof origFetch === "function") {
+if (!IS_PACKAGE_MANAGER && typeof origFetch === "function") {
   globalThis.fetch = async function devscopeFetch(input, init) {
     let url = "";
     try { url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input?.url ?? input); } catch {}
@@ -197,7 +200,7 @@ function instrument(req, args) {
   } catch { /* never disturb the app */ }
   return req;
 }
-for (const mod of [http, https]) {
+for (const mod of IS_PACKAGE_MANAGER ? [] : [http, https]) {
   const origRequest = mod.request, origGet = mod.get;
   mod.request = function (...args) { return instrument(origRequest.apply(this, args), args); };
   mod.get = function (...args) { return instrument(origGet.apply(this, args), args); };
