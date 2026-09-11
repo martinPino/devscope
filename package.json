@@ -1,6 +1,6 @@
 {
   "name": "devscope",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Flipper-style device inspector: live network traffic and layout tree from Android and iOS apps, web UI + Electron desktop app.",
   "type": "module",
   "scripts": {

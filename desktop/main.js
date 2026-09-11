@@ -222,8 +222,20 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on("second-instance", () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
 }
+// The Node hook must exist before the user runs NODE_OPTIONS=--import, even if the server
+// was never started: install/refresh ~/.devscope/devscope-node.mjs whenever the app opens.
+function installNodeHook() {
+  try {
+    const src = path.join(__dirname, "..", "node", "devscope-node.mjs");
+    const dest = path.join(os.homedir(), ".devscope", "devscope-node.mjs");
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    if (!fs.existsSync(dest) || fs.readFileSync(dest, "utf8") !== fs.readFileSync(src, "utf8")) fs.copyFileSync(src, dest);
+  } catch (e) { log(`[desktop] could not install the Node hook: ${e.message}`); }
+}
+
 app.whenReady().then(() => {
   loadSettings();
+  installNodeHook();
   if (process.env.DEVSCOPE_PORT) settings.port = Number(process.env.DEVSCOPE_PORT) || settings.port; // per-launch override, not persisted
   state.port = Number(settings.port) || DEFAULTS.port;
   state.adb = findAdb();

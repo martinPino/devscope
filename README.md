@@ -93,7 +93,11 @@ The browser only sees what React Router / Remix / Next loaders send it. To also 
 NODE_OPTIONS="--import $HOME/.devscope/devscope-node.mjs" npm run dev
 ```
 
-DevScope writes `~/.devscope/devscope-node.mjs` when its server starts (the file also lives in `node/` and is served at `/node/devscope-node.mjs`). The hook wraps `fetch` (undici) and the `http` / `https` modules, so axios, got, node-fetch and plain fetch are all covered: method, URL, headers, request and response bodies (gzip/deflate decoded, 512 KB cap) and timing. The process shows up as a device (`enrg-resultpage · Node 24 · pid 1234`) after its first request and disappears ~45 s after it exits. It never throws into the host application. Node 18.19+ / 20.6+; set `DEVSCOPE_URL` if the server is not on `localhost:8765`.
+DevScope writes `~/.devscope/devscope-node.mjs` when the desktop app opens, when the server starts and when `install.sh` runs (the file also lives in `node/` and is served at `/node/devscope-node.mjs`). If Node reports `ERR_MODULE_NOT_FOUND` for that path, open DevScope once, or fetch it directly:
+
+```bash
+curl -fsSL http://localhost:8765/node/devscope-node.mjs --create-dirs -o ~/.devscope/devscope-node.mjs
+``` The hook wraps `fetch` (undici) and the `http` / `https` modules, so axios, got, node-fetch and plain fetch are all covered: method, URL, headers, request and response bodies (gzip/deflate decoded, 512 KB cap) and timing. The process shows up as a device (`enrg-resultpage · Node 24 · pid 1234`) after its first request and disappears ~45 s after it exits. It never throws into the host application. Node 18.19+ / 20.6+; set `DEVSCOPE_URL` if the server is not on `localhost:8765`.
 
 ## Hook up your iOS app (debug builds only)
 

@@ -211,6 +211,7 @@
       <h2 style="margin:10px 0 2px">Node dev server / backend</h2>
       <p class="hint">See the calls your loaders or BFF make to the backend: start the process with the DevScope hook preloaded — nothing to add to the repo.</p>
       <div class="cmd"><code id="nodeCmd">NODE_OPTIONS="--import $HOME/.devscope/devscope-node.mjs" npm run dev</code><button id="nodeCmdCopy">Copy</button></div>
+      <p class="hint">Missing module error? DevScope writes that file when it starts; you can also fetch it: <code id="nodeFetchCmd">curl -fsSL http://localhost:8765/node/devscope-node.mjs --create-dirs -o ~/.devscope/devscope-node.mjs</code></p>
     </div>
   </aside>
 
@@ -821,6 +822,7 @@ function highlight(json) {
   input.onkeydown = (ev) => { if (ev.key === "Enter") open(); };
   const cmd = $("#nodeCmd");
   if (location.port && location.port !== "8765") cmd.textContent = `DEVSCOPE_URL=${location.origin} ${cmd.textContent}`;
+  $("#nodeFetchCmd").textContent = `curl -fsSL ${location.origin}/node/devscope-node.mjs --create-dirs -o ~/.devscope/devscope-node.mjs`;
   $("#nodeCmdCopy").onclick = (ev) => copyWithFeedback(ev.currentTarget, cmd.textContent, cmd);
 })();
 

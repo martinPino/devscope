@@ -83,6 +83,8 @@ fi
 rm -rf "$target"
 ditto "$app" "$target"
 rm -rf "$(dirname "$app")"
+# Node hook for NODE_OPTIONS=--import (the app and the server refresh it too)
+mkdir -p "$HOME/.devscope" && cp node/devscope-node.mjs "$HOME/.devscope/devscope-node.mjs"
 version="$(node -p 'require("./package.json").version')"
 if [[ "$DEST" == "/Applications" || "$DEST" == "$HOME/Applications" ]]; then
   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$target" >/dev/null 2>&1 || true
