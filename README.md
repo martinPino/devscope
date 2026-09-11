@@ -95,6 +95,27 @@ DevScope writes `~/.devscope/devscope-node.mjs` when the desktop app opens, when
 curl -fsSL http://localhost:8765/node/devscope-node.mjs --create-dirs -o ~/.devscope/devscope-node.mjs
 ``` The hook wraps `fetch` (undici) and the `http` / `https` modules, so axios, got, node-fetch and plain fetch are all covered: method, URL, headers, request and response bodies (gzip/deflate decoded, 512 KB cap) and timing. The process shows up as a device (`enrg-resultpage · Node 24 · pid 1234`) after its first request and disappears ~45 s after it exits. It never throws into the host application. Node 18.19+ / 20.6+; set `DEVSCOPE_URL` if the server is not on `localhost:8765`.
 
+### Node inside Docker
+
+Same hook, injected through a compose override kept outside the repo — the container just needs to see the file and to reach the Mac:
+
+```yaml
+# ~/.devscope/<project>.devscope.yml
+services:
+  web:                                   # your Node service
+    environment:
+      NODE_OPTIONS: "--import /devscope/devscope-node.mjs"
+      DEVSCOPE_URL: "http://host.docker.internal:8765"
+    volumes:
+      - ${HOME}/.devscope:/devscope:ro
+```
+
+```bash
+docker compose -f docker-compose.yml -f ~/.devscope/<project>.devscope.yml up -d --force-recreate web
+```
+
+`host.docker.internal` resolves to the Mac on Docker Desktop and OrbStack. Package managers (`pnpm run dev`, `pnpm install` in start scripts) inherit `NODE_OPTIONS` too, but the hook stays inert in them, so only the app process reports.
+
 ## Hook up your iOS app (debug builds only)
 
 1. Copy `ios/DevScope.swift` into the app target (it is wrapped in `#if DEBUG`, so Release compiles it to nothing). iOS 13+.
