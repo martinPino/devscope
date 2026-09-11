@@ -52,6 +52,15 @@
   .device .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
   .tag { font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--line); color: var(--text); }
   .tag.virtual { background: #3b3a2b; color: var(--accent); }
+  .tag.browser { background: #263a36; color: var(--get); }
+  .device .close { float: right; color: var(--muted); font-size: 12px; padding: 0 4px; border-radius: 3px; }
+  .device .close:hover { color: var(--err); background: var(--hover); }
+  .webbar { margin: 14px 0 0; padding: 12px 16px 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+  .webbar input { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font-family: var(--mono); font-size: 12px; width: 100%; }
+  .webbar input::placeholder { color: var(--muted); }
+  .webbar button { width: 100%; }
+  .webbar .hint { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 0; }
+  .webbar .hint.err { color: var(--err); }
   .empty { color: var(--muted); padding: 8px 16px; font-size: 12px; }
   .empty code { font-family: var(--mono); color: var(--text); }
 
@@ -118,7 +127,7 @@
   .lnode .row:hover { background: var(--hover); }
   .lnode .row.selected { background: var(--hover); box-shadow: inset 2px 0 0 var(--accent); }
   .caret { width: 12px; flex: none; color: var(--muted); user-select: none; }
-  .t-view, .t-uikit { color: var(--post); } .t-compose, .t-swiftui { color: var(--get); }
+  .t-view, .t-uikit, .t-dom { color: var(--post); } .t-compose, .t-swiftui, .t-react { color: var(--get); }
   .lnode .meta { color: var(--muted); } .lnode .txt { color: var(--text); opacity: .85; }
   .lnode .row.dim { opacity: .45; }
   #lside { overflow: auto; }
@@ -175,6 +184,12 @@
   <aside>
     <h2>Devices</h2>
     <div id="devices"></div>
+    <div class="webbar">
+      <h2 style="margin:0 0 2px">Web app</h2>
+      <input id="webUrl" placeholder="http://localhost:3000" spellcheck="false" aria-label="URL to open">
+      <button id="webOpen" title="Launch Chrome with DevScope attached through the DevTools protocol">Open Chrome</button>
+      <p class="hint" id="webHint">Opens a Chrome with its own profile and inspects it through the DevTools protocol — no code in the web app.</p>
+    </div>
   </aside>
 
   <main>
@@ -198,6 +213,7 @@
       <li><b>Paste it into your AI coding agent</b> (Claude Code, Cursor, Codex…) opened in your Android repo. It adds the interceptor, the layout agent and the cleartext config to debug builds only.</li>
       <li><b>Rebuild and launch the debug app</b> — requests and the layout tree show up here.</li>
     </ol>
+    <p class="muted" style="margin:0">Web apps need none of this: use <b>Open Chrome</b> in the sidebar and DevScope attaches to the browser's DevTools protocol.</p>
     <div class="opts">
       <span class="seg" role="radiogroup" aria-label="Platform">
         <label><input type="radio" name="setupPlatform" value="android" checked> Android</label>
@@ -278,11 +294,19 @@ function renderDevices() {
   box.innerHTML = all + state.devices.map((d) => `
     <button class="device ${state.selectedDevice === d.serial ? "selected" : ""}" data-serial="${d.serial}" title="${esc(d.serial)}">
       <div class="name"><span>${esc(d.avdName || d.model)}</span><span class="tag ${d.type}">${d.platform === "ios" ? (d.type === "virtual" ? "simulator" : "iphone") : d.type}</span></div>
-      <div class="meta">${d.state !== "device" ? esc(d.state) : d.platform === "ios" ? `${esc(d.os || "iOS")} ${esc(d.release)}` : `Android ${esc(d.release)} · API ${esc(d.sdk)}`} · <span class="mono">${esc(d.platform === "ios" ? d.serial.slice(0, 8) : d.serial)}</span></div>
+      <div class="meta">${d.state !== "device" ? esc(d.state)
+        : d.platform === "web" ? `${esc(d.model)} ${esc(d.release)} · ${d.pages ?? 0} tab${d.pages === 1 ? "" : "s"}${d.url ? ` · <span class="mono" title="${esc(d.url)}">${esc(shortUrl(d.url))}</span>` : ""}`
+        : d.platform === "ios" ? `${esc(d.os || "iOS")} ${esc(d.release)}` : `Android ${esc(d.release)} · API ${esc(d.sdk)}`}${d.platform === "web" ? "" : ` · <span class="mono">${esc(d.platform === "ios" ? d.serial.slice(0, 8) : d.serial)}</span>`}${d.platform === "web" ? `<span class="close" role="button" data-closeweb="${esc(d.serial)}" title="Close this browser">✕</span>` : ""}</div>
       ${d.platform !== "ios" && d.state === "device" && !d.reverse ? `<div class="meta err">adb reverse failed — app must use 10.0.2.2</div>` : ""}
     </button>`).join("");
   box.querySelectorAll(".device").forEach((b) => b.onclick = () => { state.selectedDevice = b.dataset.serial || null; renderDevices(); renderList(); renderLayout(); sendWatch(); });
+  box.querySelectorAll("[data-closeweb]").forEach((x) => x.onclick = (ev) => {
+    ev.stopPropagation();
+    fetch(`/api/web/${encodeURIComponent(x.dataset.closeweb)}`, { method: "DELETE" });
+    if (state.selectedDevice === x.dataset.closeweb) state.selectedDevice = null;
+  });
 }
+function shortUrl(u) { try { const x = new URL(u); return x.host + (x.pathname === "/" ? "" : x.pathname); } catch { return u; } }
 
 // ---------- layout inspector ----------
 function layoutSerial() {
@@ -388,7 +412,7 @@ function renderProps() {
   const n = pathNode(state.selectedNode);
   if (!n) { box.innerHTML = `<p class="empty" style="padding:8px 0">Select a node — hovering highlights it on the screenshot.</p>`; return; }
   const rows = {
-    kind: { compose: "composable (semantics)", swiftui: "SwiftUI (accessibility)", uikit: "UIView", view: "view" }[n.kind] ?? n.kind,
+    kind: { compose: "composable (semantics)", swiftui: "SwiftUI (accessibility)", uikit: "UIView", view: "view", dom: "DOM element", react: "React component" }[n.kind] ?? n.kind,
     type: n.type, id: n.id, text: n.text, desc: n.desc,
     bounds: n.bounds ? `x:${n.bounds[0]}  y:${n.bounds[1]}  w:${n.bounds[2]}  h:${n.bounds[3]}` : null,
     visible: n.hidden ? "no" : "yes",
@@ -595,6 +619,31 @@ function highlight(json) {
     return `<span class="${c}">${m}</span>`;
   });
 }
+
+// ---------- web: launch an instrumented Chrome ----------
+(() => {
+  const KEY = "devscope.webUrl";
+  const input = $("#webUrl"), btn = $("#webOpen"), hint = $("#webHint");
+  const defaultHint = hint.textContent;
+  try { input.value = localStorage.getItem(KEY) || ""; } catch {}
+  const setHint = (text, err) => { hint.textContent = text; hint.classList.toggle("err", !!err); };
+  const open = async () => {
+    const url = input.value.trim();
+    try { localStorage.setItem(KEY, url); } catch {}
+    btn.disabled = true; setHint("Launching Chrome…", false);
+    try {
+      const r = await fetch("/api/web/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      state.selectedDevice = j.serial;
+      setHint(defaultHint, false);
+      renderDevices(); renderList(); renderLayout();
+    } catch (e) { setHint(e.message, true); }
+    btn.disabled = false;
+  };
+  btn.onclick = open;
+  input.onkeydown = (ev) => { if (ev.key === "Enter") open(); };
+})();
 
 // ---------- resizable detail column ----------
 (() => {

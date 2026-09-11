@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createWebProvider } from "./web.js";
 
 const exec = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -216,7 +217,8 @@ async function pollDevices() {
     for (const [serial, d] of devices) if (d.platform === "ios") seen.add(serial);
   }
 
-  for (const serial of devices.keys()) {
+  for (const [serial, d] of devices) {
+    if (d.platform === "web") continue; // browsers are managed by the web provider, not by polling
     if (!seen.has(serial)) {
       devices.delete(serial);
       screenshots.delete(serial);
@@ -239,14 +241,43 @@ app.get("/api/state", (_req, res) => {
   res.json({ adbAvailable, devices: [...devices.values()], events });
 });
 
-app.post("/ingest", (req, res) => {
-  const ev = normalizeEvent(req.body);
-  ev.device = matchDevice(ev);
+function recordEvent(raw, serial = null) {
+  const ev = normalizeEvent(raw);
+  ev.device = serial ?? matchDevice(ev);
   events.push(ev);
   if (events.length > MAX_EVENTS) events.shift();
   broadcast({ type: "network", event: ev });
-  res.status(204).end();
+  return ev;
+}
+
+// Browser-side reporters need CORS; the desktop/mobile drop-ins don't care.
+app.options("/ingest", (_req, res) => {
+  res.set({ "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "POST" }).status(204).end();
 });
+app.post("/ingest", (req, res) => {
+  recordEvent(req.body);
+  res.set("Access-Control-Allow-Origin", "*").status(204).end();
+});
+
+// ---------- web (Chromium via DevTools protocol) ----------
+const web = createWebProvider({
+  devices, recordEvent, broadcast, layouts, screenshots,
+  devicesChanged: () => { broadcast({ type: "devices", devices: [...devices.values()] }); broadcast({ type: "agents", agents: agentSerials() }); },
+});
+app.get("/api/web/chrome", (_req, res) => res.json({ chrome: web.chromePath() }));
+app.post("/api/web/launch", async (req, res) => {
+  try { res.json({ serial: await web.launch({ url: req.body?.url }) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post("/api/web/attach", async (req, res) => {
+  try { res.json({ serial: await web.attach({ port: req.body?.port || 9222 }) }); }
+  catch (e) { res.status(500).json({ error: `Could not attach to a browser on port ${req.body?.port || 9222}: ${e.message}` }); }
+});
+app.delete("/api/web/:serial", async (req, res) => {
+  res.status((await web.close(req.params.serial)) ? 204 : 404).end();
+});
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => { web.shutdown(); process.exit(0); });
+process.on("exit", () => web.shutdown());
 
 app.delete("/api/events", (_req, res) => {
   events.length = 0;
@@ -294,6 +325,7 @@ function normalizeEvent(b = {}) {
     responseSize: b.responseSize ?? null,
     error: b.error ?? null,
     androidId: b.androidId || null,
+    resourceType: b.resourceType || null,
     simulatorUdid: b.simulatorUdid || null,
     platform: b.platform || (b.androidId ? "android" : null),
     appId: b.appId || null,
@@ -334,7 +366,7 @@ function broadcast(msg) {
 }
 
 function agentSerials() {
-  const out = new Set();
+  const out = new Set(web.serials());
   for (const { ident } of agents.values()) {
     const serial = resolveSerial(ident);
     if (serial) out.add(serial);
@@ -359,8 +391,9 @@ function agentForSerial(serial) {
 const layoutWatchers = new Map(); // serial -> Set<browser ws>
 
 function syncAgentWatch(serial) {
-  const agent = agentForSerial(serial);
   const on = (layoutWatchers.get(serial)?.size ?? 0) > 0;
+  if (web.has(serial)) { web.setWatch(serial, on); return; }
+  const agent = agentForSerial(serial);
   if (agent && agent.readyState === 1) agent.send(JSON.stringify({ type: "layout.watch", on, serial }));
 }
 
@@ -378,7 +411,9 @@ wss.on("connection", (ws) => {
   ws.on("message", (data) => {
     let msg;
     try { msg = JSON.parse(data); } catch { return; }
-    if (msg.type === "layout.capture") {
+    if (msg.type === "layout.capture" && web.has(msg.serial)) {
+      web.capture(msg.serial).catch((e) => ws.send(JSON.stringify({ type: "layout.error", serial: msg.serial, error: e.message })));
+    } else if (msg.type === "layout.capture") {
       const agent = agentForSerial(msg.serial);
       if (!agent || agent.readyState !== 1) {
         ws.send(JSON.stringify({ type: "layout.error", serial: msg.serial, error: "No layout agent connected for this device. Launch a debug build with DevScope." }));

@@ -1,6 +1,6 @@
 # DevScope
 
-Flipper-style inspector that runs in the browser. Detects Android devices/emulators through `adb` and iOS simulators/iPhones through `xcrun`, and shows every API call from your app live: method, status, URL, timing, request/response headers and bodies — plus the view/composable tree.
+Flipper-style inspector that runs in the browser. Detects Android devices/emulators through `adb`, iOS simulators/iPhones through `xcrun` and Chromium browsers through the DevTools protocol, and shows every API call from your app live: method, status, URL, timing, request/response headers and bodies — plus the view / composable / DOM tree.
 
 No manual wiring needed: DevScope hands you a **copy-paste prompt** that makes your AI coding agent set your repo up for both inspectors — see [Set up your app with one prompt](#set-up-your-app-with-one-prompt).
 
@@ -61,7 +61,7 @@ Dev hooks: `DEVSCOPE_PORT=8766` overrides the port for one launch, `DEVSCOPE_AUT
 
 ## Set up your app with one prompt
 
-You don't have to integrate DevScope by hand. Click **Set up app**, pick **Android** or **iOS**, in the header (or the *Set up your app* link shown while DevScope is waiting for traffic), copy the prompt, and paste it into your AI coding agent (Claude Code, Cursor, Codex, …) opened in your Android or iOS repo. The agent does the wiring for you:
+Web apps need nothing (see above). For mobile you don't have to integrate DevScope by hand either: click **Set up app**, pick **Android** or **iOS**, in the header (or the *Set up your app* link shown while DevScope is waiting for traffic), copy the prompt, and paste it into your AI coding agent (Claude Code, Cursor, Codex, …) opened in your Android or iOS repo. The agent does the wiring for you:
 
 - adds `DevScopeInterceptor` and `DevScopeLayoutAgent` to the **debug** source set — release builds are untouched;
 - installs them through a tiny `DevScope.install(context, builder)` facade (real in debug, no-op in release) as the last OkHttp interceptor;
@@ -71,6 +71,17 @@ You don't have to integrate DevScope by hand. Click **Set up app**, pick **Andro
 The prompt is generic (works for any project; set the **Module** field if your client lives outside `app`) and self-contained: the Kotlin sources are embedded, so the agent needs no network access. Untick **Embed the Kotlin sources** to get a shorter prompt that `curl`s them from `http://localhost:8765/android/` instead. Either way the result covers both the **Network** and the **Layout** inspector.
 
 Prefer to do it yourself? The manual steps are below.
+
+## Web apps: no setup at all
+
+Type your app's URL in the **Web app** box of the sidebar and click **Open Chrome**. DevScope launches a Chrome with its own profile and `--remote-debugging-port`, attaches to every tab through the DevTools protocol and shows:
+
+- every `fetch` / XHR / document request with headers, bodies and timing — HTTPS included, no proxy or certificate involved (static assets such as images, scripts and fonts are filtered out);
+- in the **Layout** page, the DOM tree annotated with the **React component** that rendered each element (read from React's fiber, so it shows `ProductCard` rather than just `div`), `id` / `data-testid`, text, and bounds over a screenshot of the page. Live mode re-captures when the DOM changes.
+
+Each browser appears as a device (`Chrome 152 · 3 tabs · localhost:3000`); the ✕ on its row closes it, and browsers DevScope launched are closed when the server stops. Works with Chrome, Chromium, Edge and Brave (set `DEVSCOPE_CHROME` to point at another binary). Safari and Firefox speak different protocols and are not supported this way.
+
+Already running Chrome with `--remote-debugging-port=9222`? `POST /api/web/attach {"port": 9222}` attaches to it instead of launching a new one.
 
 ## Hook up your iOS app (debug builds only)
 
@@ -148,6 +159,7 @@ adb reverse tcp:8765 ───────────────────�
 ```
 
 - `desktop/` — Electron shell: `main.js` (server child process, adb discovery, settings), `preload.cjs`, `renderer/` (top bar + embedded UI).
+- `server/web.js` — Chromium provider: launches/attaches browsers, maps `Network.*` events to DevScope events (bodies via `getResponseBody`), walks the DOM with React fiber names and captures screenshots for the Layout page.
 - `server/index.js` — Express + ws. Polls adb and xcrun, enriches devices (model, OS version, virtual/physical), sets up `adb reverse` for Android, advertises itself over Bonjour for iPhones, buffers the last 2000 events.
 - `public/index.html` — the UI. Filter with `/`, search bodies with `⌘F`, navigate with ↑ ↓, `Esc` clears both.
 - `android/DevScopeInterceptor.kt` — captures request/response (bodies up to 512 KB, text-like content only) and reports asynchronously.
