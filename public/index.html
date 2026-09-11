@@ -74,7 +74,18 @@
   .splitter { cursor: col-resize; border-left: 1px solid var(--line); position: relative; }
   .splitter::after { content: ""; position: absolute; inset: 0 0 0 -1px; background: var(--accent); opacity: 0; transition: opacity .12s; }
   .splitter:hover::after, main.dragging .splitter::after { opacity: .7; }
-  #list { overflow-y: auto; }
+  #list { display: flex; flex-direction: column; min-height: 0; }
+  #rows { overflow-y: auto; flex: 1; min-height: 0; }
+  #chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  #chips .sep { width: 1px; height: 14px; background: var(--line); margin: 0 5px; }
+  .chip { border: 1px solid var(--line); border-radius: 10px; padding: 1px 8px; font-size: 11px; color: var(--muted); background: none; font-family: var(--mono); }
+  .chip:hover { color: var(--text); }
+  .chip.on { background: var(--hover); color: var(--text); border-color: var(--accent); }
+  .chip .n { opacity: .6; margin-left: 4px; font-size: 10px; }
+  .chip.on.m-GET { color: var(--get); } .chip.on.m-POST { color: var(--post); } .chip.on.m-PUT { color: var(--put); } .chip.on.m-PATCH { color: var(--patch); } .chip.on.m-DELETE { color: var(--delete); }
+  .chip.on.s-2 { color: var(--ok); } .chip.on.s-4 { color: var(--warn); } .chip.on.s-5, .chip.on.s-ERR { color: var(--err); }
+  #chips .clear { margin-left: auto; border: 0; font-size: 11px; color: var(--muted); padding: 1px 6px; }
+  #chips .clear:hover { color: var(--text); }
   table { width: 100%; border-collapse: collapse; }
   thead th { position: sticky; top: 0; background: var(--bg); text-align: left; font-weight: 500; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 12px; }
   tbody td { padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: middle; }
@@ -204,7 +215,7 @@
   </aside>
 
   <main>
-    <section id="list"></section>
+    <section id="list"><div id="chips"></div><div id="rows"></div></section>
     <div class="splitter" id="splitNet" title="Drag to resize · double-click to reset"></div>
     <section id="detail"></section>
     <section id="ltree" hidden></section>
@@ -245,6 +256,7 @@ const state = {
   adb: null, devices: [], events: [], selectedDevice: null, selectedEvent: null,
   tab: "response", filter: "", search: "", page: "network",
   ws: null, agents: [], layouts: {}, selectedNode: null, collapsed: new Set(), capturing: false, ios: null,
+  chips: { method: new Set(), type: new Set(), status: new Set() },
   live: true, shotAt: 0, shotTimer: null,
 };
 const $ = (s) => document.querySelector(s);
@@ -457,7 +469,27 @@ function captureLayout() {
   renderLayout();
 }
 
-function visibleEvents() {
+// Quick-filter chips: method, response type (from Content-Type) and status class.
+const CHIP_GROUPS = {
+  method: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+  type: ["JSON", "HTML", "Assets", "Other"],
+  status: ["2", "3", "4", "5", "ERR"],
+};
+function typeClass(e) {
+  const ct = headerValue(e.responseHeaders, "content-type").toLowerCase();
+  if (/json|graphql|x-script|x-turbo/.test(ct)) return "JSON";
+  if (/html/.test(ct)) return "HTML";
+  if (/css|javascript|ecmascript|font|image|svg|video|audio|octet-stream|wasm|zip|pdf/.test(ct) || /^(Script|Stylesheet|Image|Font|Media)$/.test(e.resourceType || "")) return "Assets";
+  if (!ct && /json/.test(headerValue(e.requestHeaders, "accept").toLowerCase())) return "JSON";
+  return "Other";
+}
+function statusClass(e) {
+  if (e.error) return "ERR";
+  if (e.status == null) return "ERR";
+  return String(e.status)[0];
+}
+// Events that pass device + text filters — the base set the chips filter and count over.
+function baseEvents() {
   const f = state.filter.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const s = state.search.trim().toLowerCase();
   return state.events.filter((e) => {
@@ -468,9 +500,40 @@ function visibleEvents() {
     return f.every((t) => hay.includes(t));
   });
 }
+function passesChips(e, except = null) {
+  const c = state.chips;
+  if (except !== "method" && c.method.size && !c.method.has(c.method.has(e.method) ? e.method : "__other__")) return false;
+  if (except !== "type" && c.type.size && !c.type.has(typeClass(e))) return false;
+  if (except !== "status" && c.status.size && !c.status.has(statusClass(e))) return false;
+  return true;
+}
+function visibleEvents() { return baseEvents().filter((e) => passesChips(e)); }
+
+function renderChips() {
+  const base = baseEvents();
+  const anyOn = Object.values(state.chips).some((set) => set.size);
+  const count = (group, value) => base.filter((e) => passesChips(e, group) && (group === "method" ? e.method === value : group === "type" ? typeClass(e) === value : statusClass(e) === value)).length;
+  const label = (group, v) => group === "status" ? (v === "ERR" ? "ERR" : `${v}xx`) : v;
+  const html = Object.entries(CHIP_GROUPS).map(([group, values], i) =>
+    (i ? `<span class="sep"></span>` : "") + values.map((v) => {
+      const n = count(group, v);
+      const on = state.chips[group].has(v);
+      const cls = group === "method" ? `m-${v}` : group === "status" ? `s-${v}` : "";
+      return `<button class="chip ${cls} ${on ? "on" : ""}" data-group="${group}" data-value="${v}" title="${on ? "Remove" : "Add"} filter" ${!n && !on ? "disabled" : ""}>${label(group, v)}<span class="n">${n}</span></button>`;
+    }).join("")).join("");
+  $("#chips").innerHTML = html + (anyOn ? `<button class="clear" id="chipsClear">clear</button>` : "");
+  $("#chips").querySelectorAll(".chip").forEach((b) => b.onclick = () => {
+    const set = state.chips[b.dataset.group];
+    set.has(b.dataset.value) ? set.delete(b.dataset.value) : set.add(b.dataset.value);
+    renderList();
+  });
+  const clear = $("#chipsClear");
+  if (clear) clear.onclick = () => { for (const set of Object.values(state.chips)) set.clear(); renderList(); };
+}
 
 function renderList() {
-  const list = $("#list");
+  const list = $("#rows");
+  renderChips();
   const evs = visibleEvents();
   $("#count").textContent = `${evs.length} request${evs.length === 1 ? "" : "s"}`;
   if (!evs.length) {
@@ -497,7 +560,7 @@ function renderList() {
 
 function selectEvent(id) {
   state.selectedEvent = state.events.find((e) => e.id === id) || null;
-  $("#list").querySelectorAll("tbody tr").forEach((r) => r.classList.toggle("selected", r.dataset.id === id));
+  $("#rows").querySelectorAll("tbody tr").forEach((r) => r.classList.toggle("selected", r.dataset.id === id));
   renderDetail();
 }
 
@@ -864,6 +927,7 @@ document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape") {
     $("#filter").value = ""; state.filter = "";
     $("#search").value = ""; state.search = ""; $("#search").classList.remove("active");
+    for (const set of Object.values(state.chips)) set.clear();
     renderList(); renderDetail(); renderLayout();
   }
   if ((ev.key === "ArrowDown" || ev.key === "ArrowUp") && document.activeElement.tagName !== "INPUT") {
