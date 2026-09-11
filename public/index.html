@@ -53,6 +53,10 @@
   .tag { font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--line); color: var(--text); }
   .tag.virtual { background: #3b3a2b; color: var(--accent); }
   .tag.browser { background: #263a36; color: var(--get); }
+  .tag.server { background: #33304a; color: var(--put); }
+  .webbar code { font-family: var(--mono); font-size: 11px; color: var(--text); word-break: break-all; }
+  .webbar .cmd { display: flex; gap: 6px; align-items: center; }
+  .webbar .cmd button { width: auto; padding: 2px 8px; font-size: 11px; white-space: nowrap; }
   .device .close { float: right; color: var(--muted); font-size: 12px; padding: 0 4px; border-radius: 3px; }
   .device .close:hover { color: var(--err); background: var(--hover); }
   .webbar { margin: 14px 0 0; padding: 12px 16px 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
@@ -193,6 +197,9 @@
       <input id="webUrl" placeholder="http://localhost:3000" spellcheck="false" aria-label="URL to open">
       <button id="webOpen" title="Launch Chrome with DevScope attached through the DevTools protocol">Open Chrome</button>
       <p class="hint" id="webHint">Opens a Chrome with its own profile and inspects it through the DevTools protocol — no code in the web app.</p>
+      <h2 style="margin:10px 0 2px">Node dev server / backend</h2>
+      <p class="hint">See the calls your loaders or BFF make to the backend: start the process with the DevScope hook preloaded — nothing to add to the repo.</p>
+      <div class="cmd"><code id="nodeCmd">NODE_OPTIONS="--import $HOME/.devscope/devscope-node.mjs" npm run dev</code><button id="nodeCmdCopy">Copy</button></div>
     </div>
   </aside>
 
@@ -297,10 +304,11 @@ function renderDevices() {
   // (device rows show a short serial for iOS UDIDs; the full one is in the title)
   box.innerHTML = all + state.devices.map((d) => `
     <button class="device ${state.selectedDevice === d.serial ? "selected" : ""}" data-serial="${d.serial}" title="${esc(d.serial)}">
-      <div class="name"><span>${esc(d.avdName || d.model)}</span><span class="tag ${d.type}">${d.platform === "ios" ? (d.type === "virtual" ? "simulator" : "iphone") : d.type}</span></div>
+      <div class="name"><span>${esc(d.avdName || d.model)}</span><span class="tag ${d.type}">${d.platform === "ios" ? (d.type === "virtual" ? "simulator" : "iphone") : d.platform === "node" ? "node" : d.type}</span></div>
       <div class="meta">${d.state !== "device" ? esc(d.state)
         : d.platform === "web" ? `${esc(d.model)} ${esc(d.release)} · ${d.pages ?? 0} tab${d.pages === 1 ? "" : "s"}${d.url ? ` · <span class="mono" title="${esc(d.url)}">${esc(shortUrl(d.url))}</span>` : ""}`
-        : d.platform === "ios" ? `${esc(d.os || "iOS")} ${esc(d.release)}` : `Android ${esc(d.release)} · API ${esc(d.sdk)}`}${d.platform === "web" ? "" : ` · <span class="mono">${esc(d.platform === "ios" ? d.serial.slice(0, 8) : d.serial)}</span>`}${d.platform === "web" ? `<span class="close" role="button" data-closeweb="${esc(d.serial)}" title="Close this browser">✕</span>` : ""}</div>
+        : d.platform === "node" ? `Node ${esc(d.release)} · pid ${esc(d.pid ?? "?")}${d.argv ? ` · <span class="mono" title="${esc(d.cwd || "")}">${esc(d.argv)}</span>` : ""}`
+        : d.platform === "ios" ? `${esc(d.os || "iOS")} ${esc(d.release)}` : `Android ${esc(d.release)} · API ${esc(d.sdk)}`}${d.platform === "web" || d.platform === "node" ? "" : ` · <span class="mono">${esc(d.platform === "ios" ? d.serial.slice(0, 8) : d.serial)}</span>`}${d.platform === "web" ? `<span class="close" role="button" data-closeweb="${esc(d.serial)}" title="Close this browser">✕</span>` : ""}</div>
       ${d.platform !== "ios" && d.state === "device" && !d.reverse ? `<div class="meta err">adb reverse failed — app must use 10.0.2.2</div>` : ""}
     </button>`).join("");
   box.querySelectorAll(".device").forEach((b) => b.onclick = () => { state.selectedDevice = b.dataset.serial || null; renderDevices(); renderList(); renderLayout(); sendWatch(); });
@@ -355,6 +363,7 @@ function renderLayout() {
   const status = state.capturing ? "Capturing…"
     : state.layoutError ? `<span class="err">${esc(state.layoutError)}</span>`
     : lay ? `${esc(lay.activity ?? "")} · ${new Date(lay.capturedAt).toLocaleTimeString()}`
+    : dev?.platform === "node" ? "Server processes have no layout — use the Network page"
     : hasAgent ? "Ready" : "No layout agent — launch a debug build with DevScope";
   const scrollTop = box.scrollTop;
   box.innerHTML = `<div class="toolbar">
@@ -747,6 +756,9 @@ function highlight(json) {
   };
   btn.onclick = open;
   input.onkeydown = (ev) => { if (ev.key === "Enter") open(); };
+  const cmd = $("#nodeCmd");
+  if (location.port && location.port !== "8765") cmd.textContent = `DEVSCOPE_URL=${location.origin} ${cmd.textContent}`;
+  $("#nodeCmdCopy").onclick = (ev) => copyWithFeedback(ev.currentTarget, cmd.textContent, cmd);
 })();
 
 // ---------- resizable detail column ----------

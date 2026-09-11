@@ -219,6 +219,10 @@ async function pollDevices() {
 
   for (const [serial, d] of devices) {
     if (d.platform === "web") continue; // browsers are managed by the web provider, not by polling
+    if (d.platform === "node") {        // node processes heartbeat every 20 s through the hook
+      if (Date.now() - (d.lastSeen || 0) > NODE_TTL) { devices.delete(serial); changed = true; console.log(`[node] ${d.model} (pid ${d.pid ?? "?"}) gone`); }
+      continue;
+    }
     if (!seen.has(serial)) {
       devices.delete(serial);
       screenshots.delete(serial);
@@ -236,6 +240,44 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 // Kotlin drop-ins, so the setup prompt can embed them and agents can `curl` them.
 app.use("/android", express.static(path.join(__dirname, "..", "android"), { setHeaders: (res) => res.type("text/plain; charset=utf-8") }));
 app.use("/ios", express.static(path.join(__dirname, "..", "ios"), { setHeaders: (res) => res.type("text/plain; charset=utf-8") }));
+app.use("/node", express.static(path.join(__dirname, "..", "node"), { setHeaders: (res) => res.type("text/plain; charset=utf-8") }));
+
+// Node processes preload ~/.devscope/devscope-node.mjs (NODE_OPTIONS=--import); keep it current.
+const NODE_HOOK = path.join(os.homedir(), ".devscope", "devscope-node.mjs");
+try {
+  fs.mkdirSync(path.dirname(NODE_HOOK), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, "..", "node", "devscope-node.mjs"), NODE_HOOK);
+} catch (e) { console.warn(`[node] could not install hook at ${NODE_HOOK}: ${e.message}`); }
+
+// ---------- node processes (dev servers, BFFs) reporting through the hook ----------
+const NODE_TTL = 45000;
+function upsertNode(b, { announce } = {}) {
+  if (!b?.nodeId) return null;
+  const serial = `node:${b.nodeId}`;
+  const existing = devices.get(serial);
+  const info = existing || {
+    serial, platform: "node", type: "server", state: "device", model: b.appId || "node", avdName: b.appId || "",
+    manufacturer: "", os: "Node", release: String(b.deviceModel || "").replace(/^Node\s*/, ""), sdk: "", androidId: "",
+    reverse: true, connectedAt: Date.now(),
+  };
+  info.lastSeen = Date.now();
+  if (b.pid) info.pid = b.pid;
+  if (b.cwd) info.cwd = b.cwd;
+  if (b.argv) info.argv = b.argv;
+  if (b.host) info.host = b.host;
+  if (!existing) {
+    devices.set(serial, info);
+    console.log(`[node] ${info.model} (pid ${info.pid ?? "?"}, ${info.release}) connected`);
+    broadcast({ type: "devices", devices: [...devices.values()] });
+  } else if (announce) {
+    broadcast({ type: "devices", devices: [...devices.values()] });
+  }
+  return serial;
+}
+app.post("/api/node/hello", (req, res) => {
+  upsertNode(req.body, { announce: false });
+  res.set("Access-Control-Allow-Origin", "*").status(204).end();
+});
 
 app.get("/api/state", (_req, res) => {
   res.json({ adbAvailable, devices: [...devices.values()], events });
@@ -243,6 +285,7 @@ app.get("/api/state", (_req, res) => {
 
 function recordEvent(raw, serial = null) {
   const ev = normalizeEvent(raw);
+  if (!serial && raw?.platform === "node" && raw.nodeId) serial = upsertNode(raw);
   ev.device = serial ?? matchDevice(ev);
   events.push(ev);
   if (events.length > MAX_EVENTS) events.shift();
@@ -325,6 +368,7 @@ function normalizeEvent(b = {}) {
     responseSize: b.responseSize ?? null,
     error: b.error ?? null,
     androidId: b.androidId || null,
+    nodeId: b.nodeId || null,
     resourceType: b.resourceType || null,
     simulatorUdid: b.simulatorUdid || null,
     platform: b.platform || (b.androidId ? "android" : null),

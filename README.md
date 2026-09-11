@@ -85,6 +85,16 @@ Each browser appears as a device (`Chrome 152 · 3 tabs · localhost:3000`); the
 
 Already running Chrome with `--remote-debugging-port=9222`? `POST /api/web/attach {"port": 9222}` attaches to it instead of launching a new one.
 
+## Node dev servers and backends: one environment variable
+
+The browser only sees what React Router / Remix / Next loaders send it. To also see the calls those loaders (or any Node BFF) make to your backend, start the process with the DevScope hook preloaded — nothing is added to the repo:
+
+```bash
+NODE_OPTIONS="--import $HOME/.devscope/devscope-node.mjs" npm run dev
+```
+
+DevScope writes `~/.devscope/devscope-node.mjs` when its server starts (the file also lives in `node/` and is served at `/node/devscope-node.mjs`). The hook wraps `fetch` (undici) and the `http` / `https` modules, so axios, got, node-fetch and plain fetch are all covered: method, URL, headers, request and response bodies (gzip/deflate decoded, 512 KB cap) and timing. The process shows up as a device (`enrg-resultpage · Node 24 · pid 1234`) after its first request and disappears ~45 s after it exits. It never throws into the host application. Node 18.19+ / 20.6+; set `DEVSCOPE_URL` if the server is not on `localhost:8765`.
+
 ## Hook up your iOS app (debug builds only)
 
 1. Copy `ios/DevScope.swift` into the app target (it is wrapped in `#if DEBUG`, so Release compiles it to nothing). iOS 13+.
@@ -165,6 +175,7 @@ adb reverse tcp:8765 ───────────────────�
 - `server/index.js` — Express + ws. Polls adb and xcrun, enriches devices (model, OS version, virtual/physical), sets up `adb reverse` for Android, advertises itself over Bonjour for iPhones, buffers the last 2000 events.
 - `public/index.html` — the UI. Filter with `/`, search bodies with `⌘F`, navigate with ↑ ↓, `Esc` clears both.
 - `android/DevScopeInterceptor.kt` — captures request/response (bodies up to 512 KB, text-like content only) and reports asynchronously.
+- `node/devscope-node.mjs` — preload hook for Node processes (`NODE_OPTIONS=--import`): fetch + http/https interception, heartbeat presence.
 - `ios/DevScope.swift` — the iOS drop-in: `URLProtocol` interceptor, layout agent (UIKit + SwiftUI accessibility), Bonjour/localhost transport.
 - `android/DevScopeLayoutAgent.kt` — keeps a WebSocket to `/agent` and answers `layout.dump` with the view + Compose semantics tree of the resumed activity.
 
