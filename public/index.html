@@ -104,6 +104,10 @@
   #pane { overflow: auto; padding: 12px 16px; flex: 1; }
   #pane h3 { font-size: 12px; color: var(--muted); font-weight: 500; margin: 14px 0 6px; }
   #pane h3:first-child { margin-top: 0; }
+  #pane h3 .viewtoggle { display: inline-flex; gap: 2px; margin-left: 8px; vertical-align: middle; }
+  #pane h3 .viewtoggle button { padding: 0 7px; font-size: 11px; border-radius: 3px; color: var(--muted); }
+  #pane h3 .viewtoggle button.active { background: var(--hover); color: var(--text); border-color: var(--accent); }
+  #pane h3 .fmt { margin-left: 8px; font-weight: 400; opacity: .8; }
   pre { margin: 0; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
   .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-family: var(--mono); font-size: 12px; }
   .kv .k { color: var(--muted); }
@@ -518,6 +522,7 @@ function renderDetail() {
     </div>
     <div id="pane">${markMatches(paneHtml(e), state.search.trim())}</div>`;
   d.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => { state.tab = b.dataset.tab; renderDetail(); });
+  d.querySelectorAll("[data-view]").forEach((b) => b.onclick = () => { state.bodyView = b.dataset.view; renderDetail(); });
   $("#copyPane").onclick = (ev) => copyWithFeedback(ev.currentTarget, paneText(e), $("#pane"));
   $("#copyCurl").onclick = (ev) => copyWithFeedback(ev.currentTarget, curlFor(e), null);
   updateMatches();
@@ -529,6 +534,8 @@ function paneText(e) {
   const kvText = (obj) => Object.entries(obj || {}).map(([k, v]) => `${k}: ${v}`).join("\n") || "(none)";
   if (state.tab === "headers") return `Request headers\n${kvText(e.requestHeaders)}\n\nResponse headers\n${kvText(e.responseHeaders)}`;
   if (state.tab === "request") return pretty(e.requestBody) || e.url;
+  const turbo = state.bodyView !== "raw" ? decodedBody(e) : null;
+  if (turbo) return turbo.json;
   return pretty(e.responseBody) || (e.error ? String(e.error) : "");
 }
 
@@ -559,7 +566,104 @@ function paneHtml(e) {
     const q = queryParams(e.url);
     return `${q ? `<h3>Query parameters</h3>${kv(q)}` : ""}<h3>Body</h3>${body(e.requestBody)}`;
   }
+  const turbo = decodedBody(e);
+  if (turbo) {
+    const view = state.bodyView === "raw" ? "raw" : "decoded";
+    const toggle = `<span class="viewtoggle"><button data-view="decoded" class="${view === "decoded" ? "active" : ""}">Decoded</button><button data-view="raw" class="${view === "raw" ? "active" : ""}">Raw</button></span><span class="fmt">${esc(turbo.format)}</span>`;
+    return `${e.error ? `<pre class="err">${esc(e.error)}</pre>` : ""}<h3>Body${toggle}</h3>${view === "decoded" ? `<pre>${highlight(turbo.json)}</pre>` : body(e.responseBody)}`;
+  }
   return `${e.error ? `<pre class="err">${esc(e.error)}</pre>` : ""}<h3>Body</h3>${body(e.responseBody)}`;
+}
+
+// ---------- turbo-stream (React Router 7 / Remix "single fetch" loader data) ----------
+// The body is a flattened array: objects are {"_<keyIdx>": valueIdx}, arrays hold indexes,
+// negative numbers are constants, ["D", ms] etc. are typed values and later lines
+// (P<id>:[...]) resolve deferred promises. We rebuild the real object for display.
+const TS = { HOLE: -1, NAN: -2, NEG_INF: -3, NEG_ZERO: -4, NULL: -5, POS_INF: -6, UNDEF: -7 };
+function headerValue(headers, name) {
+  const k = Object.keys(headers || {}).find((h) => h.toLowerCase() === name);
+  return k ? String(headers[k]) : "";
+}
+function looksLikeTurboStream(e) {
+  const raw = e.responseBody;
+  if (typeof raw !== "string" || !raw) return false;
+  const first = raw.trimStart();
+  if (!first.startsWith("[")) return false;
+  const ct = headerValue(e.responseHeaders, "content-type");
+  if (/text\/x-(script|turbo)/i.test(ct) || /\.data(\?|$)/.test(e.url)) return true;
+  return /^\[\{"_\d+":/.test(first);
+}
+function decodeTurboStream(raw) {
+  const lines = raw.split("\n").filter((l) => l.trim());
+  const values = [], hydrated = [];
+  const hydrate = (i) => {
+    switch (i) {
+      case TS.UNDEF: return undefined; case TS.NULL: return null; case TS.NAN: return "NaN";
+      case TS.POS_INF: return "Infinity"; case TS.NEG_INF: return "-Infinity"; case TS.NEG_ZERO: return -0;
+    }
+    if (typeof i !== "number" || i < 0 || i >= values.length) return `<ref ${i}>`;
+    if (i in hydrated) return hydrated[i];
+    const v = values[i];
+    if (v === null || typeof v !== "object") return (hydrated[i] = v);
+    if (Array.isArray(v)) {
+      if (typeof v[0] === "string") {
+        const [type, b, c] = v;
+        switch (type) {
+          case "D": return (hydrated[i] = new Date(b).toISOString());
+          case "U": return (hydrated[i] = String(b));
+          case "B": return (hydrated[i] = `${b}n`);
+          case "R": return (hydrated[i] = `/${b}/${c ?? ""}`);
+          case "Y": return (hydrated[i] = `Symbol.for(${JSON.stringify(b)})`);
+          case "E": return (hydrated[i] = { $error: c || "Error", message: b });
+          case "Z": return (hydrated[i] = hydrate(b));
+          case "P": { const holder = { $promise: b, $status: "pending" }; hydrated[i] = holder; return holder; }
+          case "S": { const out = []; hydrated[i] = out; for (const j of v.slice(1)) out.push(hydrate(j)); return out; }
+          case "M": { const out = {}; hydrated[i] = out; for (let k = 1; k < v.length; k += 2) out[String(hydrate(v[k]))] = hydrate(v[k + 1]); return out; }
+          case "N": { const out = {}; hydrated[i] = out; for (const [k, val] of Object.entries(v[1] || {})) out[String(hydrate(Number(k.slice(1))))] = hydrate(val); return out; }
+          default: { const out = { $type: type }; hydrated[i] = out; out.$values = v.slice(1).map(hydrate); return out; } // framework plugins (SingleFetchRedirect, ErrorResponse…)
+        }
+      }
+      const out = []; hydrated[i] = out;
+      for (const j of v) out.push(j === TS.HOLE ? undefined : hydrate(j));
+      return out;
+    }
+    const out = {}; hydrated[i] = out;
+    for (const [k, val] of Object.entries(v)) out[String(hydrate(Number(k.slice(1))))] = hydrate(val);
+    return out;
+  };
+  const first = JSON.parse(lines[0]);
+  if (!Array.isArray(first) || !first.length) throw new Error("not a turbo-stream payload");
+  values.push(...first);
+  const root = hydrate(0);
+  for (const line of lines.slice(1)) {
+    const m = /^([PE])(\d+):([\s\S]*)$/.exec(line);
+    if (!m) continue;
+    const chunk = JSON.parse(m[3]);
+    const start = values.length;
+    values.push(...(Array.isArray(chunk) ? chunk : [chunk]));
+    const val = hydrate(start);
+    const holder = hydrated.find((h) => h && typeof h === "object" && h.$promise === Number(m[2]));
+    if (!holder) continue;
+    delete holder.$promise; delete holder.$status;
+    if (m[1] === "E") holder.$rejected = val;
+    else if (val && typeof val === "object" && !Array.isArray(val)) Object.assign(holder, val);
+    else holder.$resolved = val;
+  }
+  return root;
+}
+const decodedCache = new WeakMap();
+function decodedBody(e) {
+  if (!looksLikeTurboStream(e)) return null;
+  if (decodedCache.has(e)) return decodedCache.get(e);
+  let out = null;
+  try {
+    const value = decodeTurboStream(e.responseBody);
+    const seen = new WeakSet();
+    const json = JSON.stringify(value, (k, v) => { if (v && typeof v === "object") { if (seen.has(v)) return "<circular>"; seen.add(v); } return v === undefined ? "undefined" : v; }, 2);
+    out = { value, json, format: "React Router · turbo-stream" };
+  } catch { out = null; }
+  decodedCache.set(e, out);
+  return out;
 }
 
 // ---------- helpers ----------

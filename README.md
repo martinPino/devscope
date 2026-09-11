@@ -79,6 +79,8 @@ Type your app's URL in the **Web app** box of the sidebar and click **Open Chrom
 - every `fetch` / XHR / document request with headers, bodies and timing — HTTPS included, no proxy or certificate involved (static assets such as images, scripts and fonts are filtered out);
 - in the **Layout** page, the DOM tree annotated with the **React component** that rendered each element (read from React's fiber, so it shows `ProductCard` rather than just `div`), `id` / `data-testid`, text, and bounds over a screenshot of the page. Live mode re-captures when the DOM changes.
 
+Responses from **React Router 7 / Remix "single fetch"** loaders (`/_.data`, `text/x-script`, the flattened turbo-stream array) are decoded automatically: the detail pane shows the real loader data per route as JSON, with a **Decoded / Raw** toggle. Copy follows the active view.
+
 Each browser appears as a device (`Chrome 152 · 3 tabs · localhost:3000`); the ✕ on its row closes it, and browsers DevScope launched are closed when the server stops. Works with Chrome, Chromium, Edge and Brave (set `DEVSCOPE_CHROME` to point at another binary). Safari and Firefox speak different protocols and are not supported this way.
 
 Already running Chrome with `--remote-debugging-port=9222`? `POST /api/web/attach {"port": 9222}` attaches to it instead of launching a new one.
