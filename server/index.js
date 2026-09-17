@@ -8,6 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createWebProvider } from "./web.js";
+import { scanUsbPhones } from "./usb.js";
+import { listIosDevices, iosDeviceInfo, iosModelName } from "./usbmux.js";
 
 const exec = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -41,7 +43,8 @@ function parseDevicesList(raw) {
     .map((l) => l.trim())
     .filter(Boolean)
     .map((line) => {
-      const [serial, state, ...rest] = line.split(/\s+/);
+      let [serial, state, ...rest] = line.split(/\s+/);
+      if (state === "no" && rest[0] === "permissions") { state = "no permissions"; rest = rest.slice(1); }
       const props = Object.fromEntries(
         rest.filter((p) => p.includes(":")).map((p) => p.split(":"))
       );
@@ -165,9 +168,85 @@ async function pollIos() {
   }
 }
 
+// ---------- connection type, guidance, USB-only phones ----------
+function adbConnection(serial) {
+  if (serial.startsWith("emulator-")) return "emulator";
+  if (/:\d+$/.test(serial) || /_adb-tls-connect\._tcp/.test(serial)) return "wifi";
+  return "usb";
+}
+const ADB_HINTS = {
+  unauthorized: "Unlock the phone and accept “Allow USB debugging” (tick “Always allow from this computer”).",
+  authorizing: "Waiting for the “Allow USB debugging” prompt on the phone.",
+  offline: "adb sees the phone but it does not answer — replug the cable or toggle USB debugging.",
+  "no permissions": "adb has no permission for this USB device — run `adb kill-server` and replug (Linux: check udev rules).",
+};
+const IOS_NOTE = "Recognized over USB. The app's DevScope agent reports over Wi-Fi (same network, Bonjour) or DevScope.serverHost — iOS has no adb-reverse equivalent.";
+
+// ---------- Chrome / WebViews on Android, through adb forward + DevTools protocol ----------
+const adbBrowsers = new Map(); // `${serial}:${socket}` -> { port, serial }
+async function syncAndroidBrowsers(serial, info) {
+  let sockets;
+  try {
+    const out = await adb("-s", serial, "shell", "cat /proc/net/unix 2>/dev/null | grep -a devtools_remote || true");
+    sockets = [...new Set(out.split("\n").map((l) => l.trim().split(/\s+/).pop()).filter((n) => n && n.startsWith("@")).map((n) => n.slice(1)))];
+  } catch { return; }
+  for (const sock of sockets) {
+    const key = `${serial}:${sock}`;
+    if (adbBrowsers.has(key)) continue;
+    adbBrowsers.set(key, { port: 0, serial });
+    try {
+      const port = Number((await adb("-s", serial, "forward", "tcp:0", `localabstract:${sock}`)).trim());
+      if (!port) throw new Error("adb forward returned no port");
+      adbBrowsers.get(key).port = port;
+      let label = sock === "chrome_devtools_remote" ? "Chrome" : sock.startsWith("webview_devtools_remote_") ? "WebView" : sock.replace(/_devtools_remote.*$/, "");
+      if (label === "WebView") {
+        try { const pkg = (await adb("-s", serial, "shell", `cat /proc/${sock.split("_").pop()}/cmdline`)).split("\0")[0].trim(); if (pkg) label = `WebView · ${pkg}`; } catch { /* keep generic label */ }
+      }
+      await web.attach({
+        port, serial: key, label, parent: serial,
+        onRemove: () => { adbBrowsers.delete(key); adb("-s", serial, "forward", "--remove", `tcp:${port}`).catch(() => {}); },
+      });
+      console.log(`[web] ${label} on ${info.avdName || info.model} attached through adb forward :${port}`);
+    } catch (e) {
+      const b = adbBrowsers.get(key);
+      adbBrowsers.delete(key);
+      if (b?.port) adb("-s", serial, "forward", "--remove", `tcp:${b.port}`).catch(() => {});
+    }
+  }
+  for (const [key, b] of adbBrowsers) {
+    if (b.serial === serial && b.port && !sockets.includes(key.slice(serial.length + 1))) web.close(key);
+  }
+}
+
+// ---------- iOS devices through usbmuxd (no Xcode needed) ----------
+const iosInfoCache = new Map(); // udid -> lockdown info
+async function pollUsbmux() {
+  let list;
+  try { list = await listIosDevices(); } catch { return null; }
+  const byUdid = new Map();
+  for (const d of list) if (!byUdid.has(d.udid) || d.connection === "usb") byUdid.set(d.udid, d); // prefer the cable
+  const out = [];
+  for (const d of byUdid.values()) {
+    if (!iosInfoCache.has(d.udid)) {
+      try { iosInfoCache.set(d.udid, await iosDeviceInfo(d.deviceId)); } catch { /* locked / not trusted yet: retry next poll */ }
+    }
+    const i = iosInfoCache.get(d.udid) || {};
+    const isPad = /ipad/i.test(i.deviceClass || i.productType || "");
+    out.push({
+      serial: d.udid, platform: "ios", type: "physical", state: "device", source: "usbmux",
+      connection: d.connection === "network" ? "wifi" : "usb",
+      model: iosModelName(i.productType) || i.deviceClass || "iPhone", avdName: i.name || "", manufacturer: "Apple",
+      os: isPad ? "iPadOS" : "iOS", release: i.productVersion || "", sdk: "", androidId: "", reverse: true,
+      note: IOS_NOTE, hint: i.productVersion ? null : "Unlock the device and tap “Trust” to read its name and iOS version.",
+    });
+  }
+  return out;
+}
+
 async function pollDevices() {
   const seen = new Set();
   let changed = false;
+  const usbPhones = await scanUsbPhones();
 
   // Android (adb). On a transient adb failure keep the devices we already know.
   let list = null;
@@ -186,35 +265,87 @@ async function pollDevices() {
       seen.add(d.serial);
       const existing = devices.get(d.serial);
       if (!existing || existing.state !== d.state) {
+        const usb = usbPhones.find((p) => p.serial && p.serial === d.serial);
         const info = d.state === "device"
           ? await enrich(d.serial, d.props)
-          : { serial: d.serial, platform: "android", model: d.serial, type: d.serial.startsWith("emulator-") ? "virtual" : "physical" };
+          : { serial: d.serial, platform: "android", model: usb?.label || d.props.model || d.serial, type: d.serial.startsWith("emulator-") ? "virtual" : "physical" };
         info.state = d.state;
+        info.connection = adbConnection(d.serial);
+        info.hint = ADB_HINTS[d.state] || null;
         info.reverse = d.state === "device" ? await setupReverse(d.serial) : false;
         info.connectedAt = existing?.connectedAt ?? Date.now();
         devices.set(d.serial, info);
         changed = true;
-        console.log(`[device] ${d.state}: ${info.model} (${d.serial}) ${info.type}`);
+        console.log(`[device] ${d.state}: ${info.model} (${d.serial}) ${info.type} via ${info.connection}`);
       }
     }
+    // Chrome and debuggable WebViews running on each phone (zero code, DevTools protocol over adb).
+    await Promise.all(list.filter((d) => d.state === "device").map((d) => syncAndroidBrowsers(d.serial, devices.get(d.serial)).catch(() => {})));
   } else {
-    for (const [serial, d] of devices) if (d.platform === "android") seen.add(serial);
+    for (const [serial, d] of devices) if (d.platform === "android" && !d.source) seen.add(serial);
   }
 
-  // iOS (simctl / devicectl). Simulators reach us through localhost, so no port reverse is needed.
+  // Android phones on the USB bus that adb does not list: debugging off, or no adb at all.
+  const adbSerials = new Set((list || []).map((d) => d.serial));
+  const adbHasUsb = (list || []).some((d) => adbConnection(d.serial) === "usb");
+  for (const p of usbPhones.filter((x) => x.kind === "android")) {
+    if (p.serial ? adbSerials.has(p.serial) : adbHasUsb) continue;
+    const serial = `usb:${p.serial || `${p.vendorId}:${p.productId}`}`;
+    seen.add(serial);
+    if (!devices.has(serial)) {
+      devices.set(serial, {
+        serial, platform: "android", type: "physical", state: "usb-only", connection: "usb", source: "usb",
+        model: p.label, manufacturer: p.vendor || "", release: "", sdk: "", androidId: "", reverse: false, connectedAt: Date.now(),
+        hint: adbAvailable
+          ? "Plugged in, but adb does not list it: enable Developer options → USB debugging on the phone, then accept the prompt."
+          : "Plugged in, but adb is not available on this machine — install Android platform-tools or set ADB.",
+      });
+      changed = true;
+      console.log(`[usb] android phone without adb: ${p.label}`);
+    }
+  }
+
+  // iOS simulators / devicectl (needs Xcode). Simulators reach us through localhost.
   const ios = await pollIos();
   if (ios) {
     for (const info of ios) {
       seen.add(info.serial);
-      if (!devices.has(info.serial)) {
-        info.connectedAt = Date.now();
+      const existing = devices.get(info.serial);
+      if (!existing || existing.source === "usb") {
+        info.connectedAt = existing?.connectedAt ?? Date.now();
         devices.set(info.serial, info);
         changed = true;
         console.log(`[device] ios: ${info.model} (${info.serial}) ${info.type}`);
       }
     }
   } else {
-    for (const [serial, d] of devices) if (d.platform === "ios") seen.add(serial);
+    for (const [serial, d] of devices) if (d.platform === "ios" && !d.source) seen.add(serial);
+  }
+
+  // iPhones / iPads known to usbmuxd — USB and paired Wi-Fi — even on Macs without Xcode.
+  const mux = await pollUsbmux();
+  if (mux) {
+    for (const info of mux) {
+      seen.add(info.serial);
+      const existing = devices.get(info.serial);
+      const differs = !existing || existing.connection !== info.connection || existing.release !== info.release || existing.avdName !== info.avdName || (existing.source === "usb");
+      if (differs) {
+        const merged = existing && !existing.source ? { ...existing, connection: info.connection, note: info.note } : { ...info, connectedAt: existing?.connectedAt ?? Date.now() };
+        devices.set(info.serial, merged);
+        changed = true;
+        if (!existing) console.log(`[device] ios: ${info.avdName || info.model} (${info.serial.slice(0, 13)}…) over ${info.connection}`);
+      }
+    }
+  } else {
+    // No usbmuxd here: at least show Apple devices seen on the bus.
+    for (const p of usbPhones.filter((x) => x.kind === "ios")) {
+      seen.add(p.udid);
+      if (!devices.has(p.udid)) {
+        devices.set(p.udid, { serial: p.udid, platform: "ios", type: "physical", state: "device", connection: "usb", source: "usb", model: p.label, avdName: "",
+          manufacturer: "Apple", os: "iOS", release: "", sdk: "", androidId: "", reverse: true, note: IOS_NOTE, connectedAt: Date.now() });
+        changed = true;
+      }
+    }
   }
 
   for (const [serial, d] of devices) {
@@ -226,6 +357,8 @@ async function pollDevices() {
     if (!seen.has(serial)) {
       devices.delete(serial);
       screenshots.delete(serial);
+      iosInfoCache.delete(serial);
+      for (const [key, b] of adbBrowsers) if (b.serial === serial) web.close(key);
       changed = true;
       console.log(`[device] disconnected: ${serial}`);
     }

@@ -1,0 +1,33 @@
++-o Root  <class IORegistryEntry, id 0x100000100, retain 35>
+  +-o AppleT6000USBXHCI@00000000  <class AppleT6000USBXHCI, id 0x100000490, registered, matched, active, busy 0 (557 ms), retain 73>
+  | +-o YubiKey OTP+FIDO+CCID@00100000  <class IOUSBHostDevice, id 0x100000bcb, registered, matched, active, busy 0 (534 ms), retain 51>
+  |       "idProduct" = 1031
+  |       "USB Product Name" = "YubiKey OTP+FIDO+CCID"
+  |       "USB Vendor Name" = "Yubico"
+  |       "idVendor" = 4176
+  | +-o Pixel 8@00200000  <class IOUSBHostDevice, id 0x100000c11, registered, matched, active, busy 0 (12 ms), retain 30>
+  |   |   "idProduct" = 20199
+  |   |   "USB Product Name" = "Pixel 8"
+  |   |   "USB Vendor Name" = "Google"
+  |   |   "idVendor" = 6353
+  |   |   "USB Serial Number" = "38241FDJH00A1B"
+  |   +-o AppleUSBHostCompositeDevice  <class AppleUSBHostCompositeDevice, id 0x100000c20, !registered, !matched, active, busy 0, retain 5>
+  |   |   "idVendor" = 6353
+  | +-o iPhone@00300000  <class IOUSBHostDevice, id 0x100000d01, registered, matched, active, busy 0 (9 ms), retain 40>
+  |       "idProduct" = 4776
+  |       "USB Product Name" = "iPhone"
+  |       "USB Vendor Name" = "Apple Inc."
+  |       "idVendor" = 1452
+  |       "USB Serial Number" = "00008110001A2B3C4D5E801E"
+  | +-o SAMSUNG_Android@00400000  <class IOUSBHostDevice, id 0x100000d55, registered, matched, active, busy 0 (9 ms), retain 40>
+  |       "idProduct" = 26720
+  |       "USB Product Name" = "SAMSUNG_Android"
+  |       "USB Vendor Name" = "SAMSUNG"
+  |       "idVendor" = 1256
+  |       "USB Serial Number" = "R58N123ABCD"
+  | +-o Portable SSD T5@00500000  <class IOUSBHostDevice, id 0x100000d77, registered, matched, active, busy 0 (9 ms), retain 40>
+  |       "idProduct" = 24945
+  |       "USB Product Name" = "Portable SSD T5"
+  |       "USB Vendor Name" = "Samsung"
+  |       "idVendor" = 1256
+  |       "USB Serial Number" = "1234567890AB"

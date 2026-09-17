@@ -145,7 +145,7 @@ export function createWebProvider({ devices, recordEvent, broadcast, layouts, sc
     return attach({ port, proc, spawned: true, url: target });
   }
 
-  async function attach({ port, proc = null, spawned = false, url = null, serial = null }) {
+  async function attach({ port, proc = null, spawned = false, url = null, serial = null, label = null, parent = null, onRemove = null }) {
     port = Number(port);
     const existing = [...browsers.values()].find((b) => b.port === port);
     if (existing) return existing.serial;
@@ -153,11 +153,12 @@ export function createWebProvider({ devices, recordEvent, broadcast, layouts, sc
     const { name, version } = browserName(v);
     serial = serial || `chrome-${port}`;
     const info = {
-      serial, platform: "web", type: "browser", state: "device", model: name, avdName: "",
+      serial, platform: "web", type: "browser", state: "device", model: label || name, avdName: "",
+      parent, via: parent ? "adb" : "local",
       manufacturer: "Google", os: name, release: version.split(".").slice(0, 2).join("."), sdk: "",
       androidId: "", reverse: true, port, pages: 0, url, connectedAt: Date.now(),
     };
-    const entry = { serial, port, proc, spawned, info, targets: new Map(), active: null, watch: null, seq: 0, dead: false };
+    const entry = { serial, port, proc, spawned, info, onRemove, targets: new Map(), active: null, watch: null, seq: 0, dead: false };
     browsers.set(serial, entry);
     devices.set(serial, info);
     log.log(`[web] attached: ${name} ${version} (${serial}, spawned=${spawned})`);
@@ -172,15 +173,21 @@ export function createWebProvider({ devices, recordEvent, broadcast, layouts, sc
     let list;
     try { list = await CDP.List({ port: entry.port }); }
     catch (e) { remove(entry, `browser gone (${e.message.split("\n")[0]})`); return; }
-    const pages = list.filter((t) => t.type === "page" && /^(https?|file|about):/.test(t.url || ""));
+    const pages = list.filter((t) => t.type === "page" && /^(https?|file|about|content):/.test(t.url || ""));
     const seen = new Set();
     let changed = false;
+    entry.attaching ||= new Set();
+    entry.retryAt ||= new Map();
     for (const t of pages) {
       seen.add(t.id);
       const known = entry.targets.get(t.id);
       if (known) { if (known.url !== t.url) { known.url = t.url; changed = true; } continue; }
-      try { await attachTarget(entry, t); changed = true; }
-      catch (e) { log.warn(`[web] could not attach tab ${t.url}: ${e.message}`); }
+      if (entry.attaching.has(t.id) || (entry.retryAt.get(t.id) || 0) > Date.now()) continue;
+      entry.attaching.add(t.id);
+      attachTarget(entry, t)
+        .then(() => { entry.retryAt.delete(t.id); entry.info.pages = entry.targets.size; if (!entry.active) entry.active = t.id; entry.info.url = entry.targets.get(entry.active)?.url || null; devicesChanged(); })
+        .catch((e) => { entry.retryAt.set(t.id, Date.now() + 20000); if (!/timed out/.test(e.message)) log.warn(`[web] could not attach tab ${t.url}: ${e.message}`); })
+        .finally(() => entry.attaching.delete(t.id));
     }
     for (const [id, tgt] of entry.targets) {
       if (!seen.has(id)) { try { tgt.client.close(); } catch {} entry.targets.delete(id); changed = true; }
@@ -194,11 +201,13 @@ export function createWebProvider({ devices, recordEvent, broadcast, layouts, sc
     if (changed) devicesChanged();
   }
 
+  const withTimeout = (promise, ms, what) => Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out`)), ms))]);
+
   async function attachTarget(entry, t) {
-    const client = await CDP({ target: t.webSocketDebuggerUrl });
+    // local: true → bundled protocol descriptor; Chrome on Android hangs up on /json/protocol.
+    const client = await withTimeout(CDP({ target: `ws://127.0.0.1:${entry.port}/devtools/page/${t.id}`, port: entry.port, local: true }), 5000, "connect");
     const { Network, Page, Runtime } = client;
     const tgt = { id: t.id, url: t.url, title: t.title, client };
-    entry.targets.set(t.id, tgt);
     const pending = new Map();     // requestId -> partial event
     const extraReq = new Map();    // requestId -> raw request headers that arrived early
     const extraRes = new Map();
@@ -284,11 +293,17 @@ export function createWebProvider({ devices, recordEvent, broadcast, layouts, sc
     });
     client.on("disconnect", () => { entry.targets.delete(t.id); });
 
-    await Promise.all([
-      Network.enable({ maxTotalBufferSize: 100 * 1024 * 1024, maxResourceBufferSize: 20 * 1024 * 1024 }),
-      Page.enable(),
-      Runtime.enable(),
-    ]);
+    try {
+      await withTimeout(Promise.all([
+        Network.enable({ maxTotalBufferSize: 100 * 1024 * 1024, maxResourceBufferSize: 20 * 1024 * 1024 }),
+        Page.enable(),
+        Runtime.enable(),
+      ]), 5000, "enable");
+    } catch (e) {
+      try { client.close(); } catch {}
+      throw e;
+    }
+    entry.targets.set(t.id, tgt); // only tabs that answered count (frozen background tabs never do)
   }
 
   function remove(entry, why) {
@@ -301,6 +316,7 @@ export function createWebProvider({ devices, recordEvent, broadcast, layouts, sc
     browsers.delete(entry.serial);
     devices.delete(entry.serial);
     screenshots.delete(entry.serial);
+    try { entry.onRemove?.(); } catch { /* best effort */ }
     log.log(`[web] detached ${entry.serial}: ${why}`);
     devicesChanged();
   }

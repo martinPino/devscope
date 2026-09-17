@@ -54,6 +54,12 @@
   .tag.virtual { background: #3b3a2b; color: var(--accent); }
   .tag.browser { background: #263a36; color: var(--get); }
   .tag.server { background: #33304a; color: var(--put); }
+  .device.child { padding-left: 30px; }
+  .device.child .name { font-weight: 400; font-size: 12px; }
+  .device.pending .name > span:first-child { opacity: .6; }
+  .device .conn { font-size: 10px; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; margin-left: 6px; color: var(--muted); vertical-align: 1px; }
+  .device .meta.hintline { color: var(--warn); line-height: 1.4; margin-top: 4px; white-space: normal; }
+  .device .meta.noteline { line-height: 1.4; margin-top: 4px; white-space: normal; opacity: .8; }
   .webbar code { font-family: var(--mono); font-size: 11px; color: var(--text); word-break: break-all; }
   .webbar .cmd { display: flex; gap: 6px; align-items: center; }
   .webbar .cmd button { width: auto; padding: 2px 8px; font-size: 11px; white-space: nowrap; }
@@ -315,14 +321,20 @@ function renderDevices() {
   const all = `<button class="device ${state.selectedDevice === null ? "selected" : ""}" data-serial="">
       <div class="name">All devices</div><div class="meta">${state.devices.length} connected</div></button>`;
   // (device rows show a short serial for iOS UDIDs; the full one is in the title)
-  box.innerHTML = all + state.devices.map((d) => `
-    <button class="device ${state.selectedDevice === d.serial ? "selected" : ""}" data-serial="${d.serial}" title="${esc(d.serial)}">
-      <div class="name"><span>${esc(d.avdName || d.model)}</span><span class="tag ${d.type}">${d.platform === "ios" ? (d.type === "virtual" ? "simulator" : "iphone") : d.platform === "node" ? "node" : d.type}</span></div>
-      <div class="meta">${d.state !== "device" ? esc(d.state)
+  const tops = state.devices.filter((d) => !d.parent || !state.devices.some((x) => x.serial === d.parent));
+  const ordered = tops.flatMap((d) => [d, ...state.devices.filter((c) => c.parent === d.serial)]);
+  const connLabel = (d) => ({ usb: "USB", wifi: "Wi-Fi" }[d.connection] || "");
+  box.innerHTML = all + ordered.map((d) => `
+    <button class="device ${state.selectedDevice === d.serial ? "selected" : ""} ${d.parent ? "child" : ""} ${d.state === "usb-only" || (d.state && d.state !== "device") ? "pending" : ""}" data-serial="${d.serial}" title="${esc(d.serial)}">
+      <div class="name"><span>${esc(d.avdName || d.model)}${connLabel(d) ? `<span class="conn">${connLabel(d)}</span>` : ""}</span><span class="tag ${d.type}">${d.platform === "ios" ? (d.type === "virtual" ? "simulator" : "iphone") : d.platform === "node" ? "node" : d.type}</span></div>
+      <div class="meta">${d.state === "usb-only" ? "USB only · not debuggable yet" : d.state !== "device" ? esc(d.state)
+        : d.platform === "web" && d.parent ? `${esc(d.release ? "v" + d.release : "")} · ${d.pages ?? 0} tab${d.pages === 1 ? "" : "s"} · via adb${d.url ? ` · <span class="mono" title="${esc(d.url)}">${esc(shortUrl(d.url))}</span>` : ""}`
         : d.platform === "web" ? `${esc(d.model)} ${esc(d.release)} · ${d.pages ?? 0} tab${d.pages === 1 ? "" : "s"}${d.url ? ` · <span class="mono" title="${esc(d.url)}">${esc(shortUrl(d.url))}</span>` : ""}`
         : d.platform === "node" ? `Node ${esc(d.release)} · pid ${esc(d.pid ?? "?")}${d.argv ? ` · <span class="mono" title="${esc(d.cwd || "")}">${esc(d.argv)}</span>` : ""}`
-        : d.platform === "ios" ? `${esc(d.os || "iOS")} ${esc(d.release)}` : `Android ${esc(d.release)} · API ${esc(d.sdk)}`}${d.platform === "web" || d.platform === "node" ? "" : ` · <span class="mono">${esc(d.platform === "ios" ? d.serial.slice(0, 8) : d.serial)}</span>`}${d.platform === "web" ? `<span class="close" role="button" data-closeweb="${esc(d.serial)}" title="Close this browser">✕</span>` : ""}</div>
-      ${d.platform !== "ios" && d.state === "device" && !d.reverse ? `<div class="meta err">adb reverse failed — app must use 10.0.2.2</div>` : ""}
+        : d.platform === "ios" ? `${esc(d.avdName ? d.model + " · " : "")}${esc(d.os || "iOS")} ${esc(d.release)}` : `Android ${esc(d.release)} · API ${esc(d.sdk)}`}${d.platform === "web" || d.platform === "node" ? "" : ` · <span class="mono">${esc(d.platform === "ios" ? d.serial.slice(0, 8) : d.serial)}</span>`}${d.platform === "web" && !d.parent ? `<span class="close" role="button" data-closeweb="${esc(d.serial)}" title="Close this browser">✕</span>` : ""}</div>
+      ${d.platform === "android" && d.state === "device" && !d.reverse ? `<div class="meta err">adb reverse failed — app must use 10.0.2.2</div>` : ""}
+      ${d.hint ? `<div class="meta hintline">${esc(d.hint)}</div>` : ""}
+      ${d.note && state.selectedDevice === d.serial ? `<div class="meta noteline">${esc(d.note)}</div>` : ""}
     </button>`).join("");
   box.querySelectorAll(".device").forEach((b) => b.onclick = () => { state.selectedDevice = b.dataset.serial || null; renderDevices(); renderList(); renderLayout(); sendWatch(); });
   box.querySelectorAll("[data-closeweb]").forEach((x) => x.onclick = (ev) => {

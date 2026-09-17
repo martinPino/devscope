@@ -68,6 +68,14 @@ The prompt is generic (works for any project; set the **Module** field if your c
 
 Prefer to do it yourself? The manual steps are below.
 
+## USB devices
+
+Plug a phone in and DevScope recognizes it, even before it is debuggable:
+
+- **Android** — phones listed by `adb` show their connection (**USB** / **Wi-Fi**) and, when something is missing, what to do (`unauthorized` → accept the prompt on the phone, `offline`, no permissions). A phone that is on the USB bus but not in `adb` at all (USB debugging off) still appears, as *USB only*, with the steps to enable it. Detection reads the bus with `ioreg` (macOS) / `lsusb` (Linux).
+- **Chrome and WebViews on the phone** — for every adb device DevScope looks for DevTools sockets (`chrome_devtools_remote`, `webview_devtools_remote_<pid>`), forwards them with `adb forward` and attaches exactly like a desktop Chrome: network with bodies and the DOM/React layout of the page open on the phone, no code. They show up nested under the phone. WebViews need `WebView.setWebContentsDebuggingEnabled(true)` (the default in debuggable builds of many apps).
+- **iPhone / iPad** — discovered through `usbmuxd`, the daemon that ships with macOS, so no Xcode is needed: name, model, iOS version and whether it is on **USB** or paired **Wi-Fi**. Apps report through the DevScope drop-in over Wi-Fi (Bonjour) or `DevScope.serverHost`; iOS has no `adb reverse` equivalent, so the cable only carries discovery.
+
 ## Web apps: no setup at all
 
 Type your app's URL in the **Web app** box of the sidebar and click **Open Chrome**. DevScope launches a Chrome with its own profile and `--remote-debugging-port`, attaches to every tab through the DevTools protocol and shows:
@@ -192,6 +200,7 @@ adb reverse tcp:8765 ───────────────────�
 ```
 
 - `desktop/` — Electron shell: `main.js` (server child process, adb discovery, settings), `preload.cjs`, `renderer/` (top bar + embedded UI).
+- `server/usb.js` / `server/usbmux.js` — USB bus scan (ioreg / lsusb) and a minimal usbmuxd + lockdown client for iOS discovery without Xcode. `test/fake-usbmuxd.mjs` is a test double.
 - `server/web.js` — Chromium provider: launches/attaches browsers, maps `Network.*` events to DevScope events (bodies via `getResponseBody`), walks the DOM with React fiber names and captures screenshots for the Layout page.
 - `server/index.js` — Express + ws. Polls adb and xcrun, enriches devices (model, OS version, virtual/physical), sets up `adb reverse` for Android, advertises itself over Bonjour for iPhones, buffers the last 2000 events.
 - `public/index.html` — the UI. Filter with `/`, search bodies with `⌘F`, navigate with ↑ ↓, `Esc` clears both.
