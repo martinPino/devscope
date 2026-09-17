@@ -328,15 +328,19 @@ function renderDevices() {
     <button class="device ${state.selectedDevice === d.serial ? "selected" : ""} ${d.parent ? "child" : ""} ${d.state === "usb-only" || (d.state && d.state !== "device") ? "pending" : ""}" data-serial="${d.serial}" title="${esc(d.serial)}">
       <div class="name"><span>${esc(d.avdName || d.model)}${connLabel(d) ? `<span class="conn">${connLabel(d)}</span>` : ""}</span><span class="tag ${d.type}">${d.platform === "ios" ? (d.type === "virtual" ? "simulator" : "iphone") : d.platform === "node" ? "node" : d.type}</span></div>
       <div class="meta">${d.state === "usb-only" ? "USB only · not debuggable yet" : d.state !== "device" ? esc(d.state)
-        : d.platform === "web" && d.parent ? `${esc(d.release ? "v" + d.release : "")} · ${d.pages ?? 0} tab${d.pages === 1 ? "" : "s"} · via adb${d.url ? ` · <span class="mono" title="${esc(d.url)}">${esc(shortUrl(d.url))}</span>` : ""}`
+        : d.platform === "web" && d.parent ? `${esc(d.release ? "v" + d.release : "")} · ${d.pages ?? 0} tab${d.pages === 1 ? "" : "s"}${d.inspectable > d.pages ? ` (${d.inspectable - d.pages} asleep)` : ""} · ${d.via === "usbmux" ? "Web Inspector over USB" : "via adb"}${d.url ? ` · <span class="mono" title="${esc(d.url)}">${esc(shortUrl(d.url))}</span>` : ""}`
         : d.platform === "web" ? `${esc(d.model)} ${esc(d.release)} · ${d.pages ?? 0} tab${d.pages === 1 ? "" : "s"}${d.url ? ` · <span class="mono" title="${esc(d.url)}">${esc(shortUrl(d.url))}</span>` : ""}`
         : d.platform === "node" ? `Node ${esc(d.release)} · pid ${esc(d.pid ?? "?")}${d.argv ? ` · <span class="mono" title="${esc(d.cwd || "")}">${esc(d.argv)}</span>` : ""}`
-        : d.platform === "ios" ? `${esc(d.avdName ? d.model + " · " : "")}${esc(d.os || "iOS")} ${esc(d.release)}` : `Android ${esc(d.release)} · API ${esc(d.sdk)}`}${d.platform === "web" || d.platform === "node" ? "" : ` · <span class="mono">${esc(d.platform === "ios" ? d.serial.slice(0, 8) : d.serial)}</span>`}${d.platform === "web" && !d.parent ? `<span class="close" role="button" data-closeweb="${esc(d.serial)}" title="Close this browser">✕</span>` : ""}</div>
+        : d.platform === "ios" ? `${esc(d.avdName ? d.model + " · " : "")}${esc(d.os || "iOS")} ${esc(d.release)}` : `Android ${esc(d.release)} · API ${esc(d.sdk)}`}${d.platform === "web" || d.platform === "node" ? "" : ` · <span class="mono">${esc(d.platform === "ios" ? d.serial.slice(0, 8) : d.serial)}</span>`}${d.platform === "web" && !d.parent ? `<span class="close" role="button" data-closeweb="${esc(d.serial)}" title="Close this browser">✕</span>` : ""}${d.platform === "web" ? `<span class="close" role="button" data-reloadweb="${esc(d.serial)}" title="Reload the page so its first requests are captured too">↻</span>` : ""}</div>
       ${d.platform === "android" && d.state === "device" && !d.reverse ? `<div class="meta err">adb reverse failed — app must use 10.0.2.2</div>` : ""}
       ${d.hint ? `<div class="meta hintline">${esc(d.hint)}</div>` : ""}
       ${d.note && state.selectedDevice === d.serial ? `<div class="meta noteline">${esc(d.note)}</div>` : ""}
     </button>`).join("");
   box.querySelectorAll(".device").forEach((b) => b.onclick = () => { state.selectedDevice = b.dataset.serial || null; renderDevices(); renderList(); renderLayout(); sendWatch(); });
+  box.querySelectorAll("[data-reloadweb]").forEach((x) => x.onclick = (ev) => {
+    ev.stopPropagation();
+    fetch("/api/web/reload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ serial: x.dataset.reloadweb }) });
+  });
   box.querySelectorAll("[data-closeweb]").forEach((x) => x.onclick = (ev) => {
     ev.stopPropagation();
     fetch(`/api/web/${encodeURIComponent(x.dataset.closeweb)}`, { method: "DELETE" });
@@ -1034,6 +1038,15 @@ For **physical iPhones** the app finds the Mac over Bonjour on the same Wi-Fi, w
 </array>
 \`\`\`
 Simulators need neither: they reach the Mac through localhost. If Bonjour is not an option, \`DevScope.serverHost = "<Mac IP>"\` before \`start()\` works too.
+
+## Optional: make the app's WebViews inspectable
+DevScope can inspect \`WKWebView\` content over USB (network + DOM) without any code in the page. On iOS 16.4+ each web view has to opt in — debug builds only:
+\`\`\`swift
+#if DEBUG
+if #available(iOS 16.4, *) { webView.isInspectable = true }
+#endif
+\`\`\`
+Add it where the app creates its \`WKWebView\`s (the shared factory, if there is one). The device also needs Settings → Apps → Safari → Advanced → Web Inspector.
 
 ## 4. Verify
 1. Build Debug and Release (e.g. \`xcodebuild -scheme <Scheme> -configuration Release build\`): Release must compile and contain no DevScope symbols.

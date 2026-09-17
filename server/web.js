@@ -46,7 +46,7 @@ export function findChrome() {
 
 // Runs in the page: DOM tree with React component names (from the fiber attached to each
 // element) and bounds in device pixels, so they line up with Page.captureScreenshot.
-const WALKER = `(() => {
+export const WALKER = `(() => {
   const dpr = window.devicePixelRatio || 1;
   const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "LINK", "META", "HEAD"]);
   let count = 0;
@@ -87,7 +87,7 @@ const WALKER = `(() => {
     if (kids.length) o.children = kids;
     return o;
   }
-  return { title: document.title, url: location.href, tree: node(document.body || document.documentElement) };
+  return { title: document.title, url: location.href, viewport: { w: window.innerWidth, h: window.innerHeight, dpr }, tree: node(document.body || document.documentElement) };
 })()`;
 
 const originOf = (u) => { try { return new URL(u).origin; } catch { return null; } };
@@ -333,15 +333,27 @@ export function createWebProvider({ devices, recordEvent, broadcast, layouts, sc
     return entry.targets.get(entry.active) || [...entry.targets.values()][0] || null;
   }
 
+  // The tab the user is looking at. Background tabs (frozen on mobile Chrome) never answer, so
+  // every probe has a short timeout; the last tab with traffic is tried first.
+  async function visibleTarget(entry) {
+    const ordered = [...entry.targets.values()].sort((a, b) => (b.id === entry.active) - (a.id === entry.active));
+    const probes = await Promise.all(ordered.map((tgt) =>
+      withTimeout(tgt.client.Runtime.evaluate({ expression: "document.visibilityState", returnByValue: true }), 1500, "probe")
+        .then((r) => (r.result?.value === "visible" ? tgt : null)).catch(() => null)));
+    const tgt = probes.find(Boolean) || null;
+    if (tgt) entry.active = tgt.id;
+    return tgt;
+  }
+
   async function snapshot(entry, { withScreenshot }) {
-    const tgt = activeTarget(entry);
-    if (!tgt) throw new Error("This browser has no open page.");
-    const { result, exceptionDetails } = await tgt.client.Runtime.evaluate({ expression: WALKER, returnByValue: true, awaitPromise: true });
+    const tgt = await visibleTarget(entry);
+    if (!tgt) throw new Error(entry.targets.size ? "No visible tab answered — bring the browser to the foreground (and wake the screen)." : "This browser has no open page.");
+    const { result, exceptionDetails } = await withTimeout(tgt.client.Runtime.evaluate({ expression: WALKER, returnByValue: true, awaitPromise: true }), 8000, "DOM walk");
     if (exceptionDetails) throw new Error(exceptionDetails.text || "DOM walk failed");
     const data = result.value || {};
     if (withScreenshot) {
       try {
-        const shot = await tgt.client.Page.captureScreenshot({ format: "png" });
+        const shot = await withTimeout(tgt.client.Page.captureScreenshot({ format: "png" }), 8000, "screenshot");
         screenshots.set(entry.serial, Buffer.from(shot.data, "base64"));
       } catch (e) { log.warn(`[web] screenshot failed: ${e.message}`); }
     }
@@ -382,6 +394,13 @@ export function createWebProvider({ devices, recordEvent, broadcast, layouts, sc
     }, 1000);
   }
 
+  async function reload(serial) {
+    const entry = browsers.get(serial);
+    const tgt = entry && ((await visibleTarget(entry)) || activeTarget(entry));
+    if (!tgt) throw new Error("No open page to reload");
+    await withTimeout(tgt.client.Page.reload({}), 6000, "reload");
+  }
+
   function shutdown() {
     for (const entry of [...browsers.values()]) {
       if (entry.spawned && entry.proc && entry.proc.exitCode === null) { try { entry.proc.kill(); } catch {} }
@@ -391,7 +410,7 @@ export function createWebProvider({ devices, recordEvent, broadcast, layouts, sc
   }
 
   return {
-    launch, attach, close, capture, setWatch, shutdown,
+    launch, attach, close, capture, setWatch, reload, shutdown,
     has: (serial) => browsers.has(serial),
     serials: () => [...browsers.keys()],
     chromePath: findChrome,

@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createWebProvider } from "./web.js";
+import { createWebkitProvider } from "./webkit.js";
 import { scanUsbPhones } from "./usb.js";
 import { listIosDevices, iosDeviceInfo, iosModelName } from "./usbmux.js";
 
@@ -243,7 +244,17 @@ async function pollUsbmux() {
   return out;
 }
 
+// A poll now talks to adb, the USB bus, usbmuxd and the inspectors; never let two overlap.
+let polling = false;
 async function pollDevices() {
+  if (polling) return;
+  polling = true;
+  try { await pollDevicesOnce(); }
+  catch (e) { console.warn(`[poll] ${e.message}`); }
+  finally { polling = false; }
+}
+
+async function pollDevicesOnce() {
   const seen = new Set();
   let changed = false;
   const usbPhones = await scanUsbPhones();
@@ -335,6 +346,19 @@ async function pollDevices() {
         changed = true;
         if (!existing) console.log(`[device] ios: ${info.avdName || info.model} (${info.serial.slice(0, 13)}…) over ${info.connection}`);
       }
+    }
+    // Safari / WKWebViews on those devices (Web Inspector through ios-webkit-debug-proxy).
+    const udids = mux.map((d) => d.serial);
+    await webkit.sync(udids).catch(() => {});
+    for (const udid of udids) {
+      const d = devices.get(udid);
+      if (!d) continue;
+      const tabs = webkit.tabsFor(udid);
+      const webNote = !webkit.proxyAvailable()
+        ? " To inspect Safari and WebViews on it: brew install ios-webkit-debug-proxy."
+        : tabs ? "" : " To inspect Safari: enable Settings → Apps → Safari → Advanced → Web Inspector and open a page.";
+      const note = IOS_NOTE + webNote;
+      if (d.note !== note) { d.note = note; changed = true; }
     }
   } else {
     // No usbmuxd here: at least show Apple devices seen on the bus.
@@ -440,7 +464,18 @@ const web = createWebProvider({
   devices, recordEvent, broadcast, layouts, screenshots,
   devicesChanged: () => { broadcast({ type: "devices", devices: [...devices.values()] }); broadcast({ type: "agents", agents: agentSerials() }); },
 });
+const webkit = createWebkitProvider({
+  devices, recordEvent, broadcast, layouts, screenshots,
+  devicesChanged: () => { broadcast({ type: "devices", devices: [...devices.values()] }); broadcast({ type: "agents", agents: agentSerials() }); },
+});
 app.get("/api/web/chrome", (_req, res) => res.json({ chrome: web.chromePath() }));
+app.get("/api/web/tabs", (req, res) => res.json(webkit.describe(String(req.query.serial || ""))));
+app.post("/api/web/reload", async (req, res) => {
+  const serial = req.body?.serial;
+  if (!webkit.has(serial) && !web.has(serial)) return res.status(404).json({ error: "Unknown browser (not attached yet?)" });
+  try { await (webkit.has(serial) ? webkit.reload(serial) : web.reload(serial)); res.status(204).end(); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.post("/api/web/launch", async (req, res) => {
   try { res.json({ serial: await web.launch({ url: req.body?.url }) }); }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -452,8 +487,8 @@ app.post("/api/web/attach", async (req, res) => {
 app.delete("/api/web/:serial", async (req, res) => {
   res.status((await web.close(req.params.serial)) ? 204 : 404).end();
 });
-for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => { web.shutdown(); process.exit(0); });
-process.on("exit", () => web.shutdown());
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => { web.shutdown(); webkit.shutdown(); process.exit(0); });
+process.on("exit", () => { web.shutdown(); webkit.shutdown(); });
 
 app.delete("/api/events", (_req, res) => {
   events.length = 0;
@@ -543,7 +578,7 @@ function broadcast(msg) {
 }
 
 function agentSerials() {
-  const out = new Set(web.serials());
+  const out = new Set([...web.serials(), ...webkit.serials()]);
   for (const { ident } of agents.values()) {
     const serial = resolveSerial(ident);
     if (serial) out.add(serial);
@@ -570,6 +605,7 @@ const layoutWatchers = new Map(); // serial -> Set<browser ws>
 function syncAgentWatch(serial) {
   const on = (layoutWatchers.get(serial)?.size ?? 0) > 0;
   if (web.has(serial)) { web.setWatch(serial, on); return; }
+  if (webkit.has(serial)) { webkit.setWatch(serial, on); return; }
   const agent = agentForSerial(serial);
   if (agent && agent.readyState === 1) agent.send(JSON.stringify({ type: "layout.watch", on, serial }));
 }
@@ -588,7 +624,9 @@ wss.on("connection", (ws) => {
   ws.on("message", (data) => {
     let msg;
     try { msg = JSON.parse(data); } catch { return; }
-    if (msg.type === "layout.capture" && web.has(msg.serial)) {
+    if (msg.type === "layout.capture" && webkit.has(msg.serial)) {
+      webkit.capture(msg.serial).catch((e) => ws.send(JSON.stringify({ type: "layout.error", serial: msg.serial, error: e.message })));
+    } else if (msg.type === "layout.capture" && web.has(msg.serial)) {
       web.capture(msg.serial).catch((e) => ws.send(JSON.stringify({ type: "layout.error", serial: msg.serial, error: e.message })));
     } else if (msg.type === "layout.capture") {
       const agent = agentForSerial(msg.serial);

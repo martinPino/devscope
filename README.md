@@ -74,6 +74,7 @@ Plug a phone in and DevScope recognizes it, even before it is debuggable:
 
 - **Android** — phones listed by `adb` show their connection (**USB** / **Wi-Fi**) and, when something is missing, what to do (`unauthorized` → accept the prompt on the phone, `offline`, no permissions). A phone that is on the USB bus but not in `adb` at all (USB debugging off) still appears, as *USB only*, with the steps to enable it. Detection reads the bus with `ioreg` (macOS) / `lsusb` (Linux).
 - **Chrome and WebViews on the phone** — for every adb device DevScope looks for DevTools sockets (`chrome_devtools_remote`, `webview_devtools_remote_<pid>`), forwards them with `adb forward` and attaches exactly like a desktop Chrome: network with bodies and the DOM/React layout of the page open on the phone, no code. They show up nested under the phone. WebViews need `WebView.setWebContentsDebuggingEnabled(true)` (the default in debuggable builds of many apps).
+- **Safari and WebViews on the iPhone / iPad** — iOS does not speak Chrome's DevTools protocol; its Web Inspector travels over a lockdown service. With `brew install ios-webkit-debug-proxy` DevScope starts that bridge by itself and attaches to every inspectable page: Safari tabs and the `WKWebView`s of your apps, nested under the device as *Safari & WebViews*, with network (bodies included) and the DOM/React layout over a snapshot. Apps often expose dozens of WebViews; only the ones that answer count and the one on screen is used for Layout and Reload (the rest are shown as *asleep*). Requirements: device trusted, **Settings → Apps → Safari → Advanced → Web Inspector** on, and for app WebViews on iOS 16.4+ `webView.isInspectable = true` in debug builds.
 - **iPhone / iPad** — discovered through `usbmuxd`, the daemon that ships with macOS, so no Xcode is needed: name, model, iOS version and whether it is on **USB** or paired **Wi-Fi**. Apps report through the DevScope drop-in over Wi-Fi (Bonjour) or `DevScope.serverHost`; iOS has no `adb reverse` equivalent, so the cable only carries discovery.
 
 ## Web apps: no setup at all
@@ -85,7 +86,7 @@ Type your app's URL in the **Web app** box of the sidebar and click **Open Chrom
 
 Responses from **React Router 7 / Remix "single fetch"** loaders (`/_.data`, `text/x-script`, the flattened turbo-stream array) are decoded automatically: the detail pane shows the real loader data per route as JSON, with a **Decoded / Raw** toggle. Copy follows the active view.
 
-Each browser appears as a device (`Chrome 152 · 3 tabs · localhost:3000`); the ✕ on its row closes it, and browsers DevScope launched are closed when the server stops. Works with Chrome, Chromium, Edge and Brave (set `DEVSCOPE_CHROME` to point at another binary). Safari and Firefox speak different protocols and are not supported this way.
+Each browser appears as a device (`Chrome 152 · 3 tabs · localhost:3000`); **↻** reloads the page so its very first requests are captured too (DevScope attaches right after the initial navigation), the ✕ on its row closes it, and browsers DevScope launched are closed when the server stops. Works with Chrome, Chromium, Edge and Brave (set `DEVSCOPE_CHROME` to point at another binary). Safari and Firefox speak different protocols and are not supported this way.
 
 Already running Chrome with `--remote-debugging-port=9222`? `POST /api/web/attach {"port": 9222}` attaches to it instead of launching a new one.
 
@@ -201,6 +202,7 @@ adb reverse tcp:8765 ───────────────────�
 
 - `desktop/` — Electron shell: `main.js` (server child process, adb discovery, settings), `preload.cjs`, `renderer/` (top bar + embedded UI).
 - `server/usb.js` / `server/usbmux.js` — USB bus scan (ioreg / lsusb) and a minimal usbmuxd + lockdown client for iOS discovery without Xcode. `test/fake-usbmuxd.mjs` is a test double.
+- `server/webkit.js` — iOS Web Inspector provider: runs `ios_webkit_debug_proxy`, wraps every command in `Target.sendMessageToTarget`, maps WebKit's `Network.*` events, probes tabs for responsiveness/visibility.
 - `server/web.js` — Chromium provider: launches/attaches browsers, maps `Network.*` events to DevScope events (bodies via `getResponseBody`), walks the DOM with React fiber names and captures screenshots for the Layout page.
 - `server/index.js` — Express + ws. Polls adb and xcrun, enriches devices (model, OS version, virtual/physical), sets up `adb reverse` for Android, advertises itself over Bonjour for iPhones, buffers the last 2000 events.
 - `public/index.html` — the UI. Filter with `/`, search bodies with `⌘F`, navigate with ↑ ↓, `Esc` clears both.
