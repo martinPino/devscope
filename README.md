@@ -8,6 +8,8 @@ No manual wiring needed: DevScope hands you a **copy-paste prompt** that makes y
 
 **Download the app** — grab the `.dmg` for your Mac from the [Releases page](https://github.com/martinPino/devscope/releases) (`arm64` for Apple Silicon, `x64` for Intel), open it and drag DevScope to Applications. The build is ad-hoc signed, not notarized, so macOS Gatekeeper will complain the first time. Either right-click the app → **Open**, or clear the quarantine flag once:
 
+**Updates** — from 0.5.0 on, **DevScope → Check for Updates…** in the menu bar installs new releases in place (download, SHA-256 check against the release's `SHA256SUMS.txt`, swap of the app bundle, relaunch). DevScope also checks quietly at launch and every 6 h and offers *Update and Restart*, *Release Notes* or *Skip This Version*. Releases are ad-hoc signed, so this is DevScope's own updater rather than Squirrel; if it cannot write to the app's folder it opens the release page instead.
+
 ```bash
 xattr -dr com.apple.quarantine /Applications/DevScope.app
 ```

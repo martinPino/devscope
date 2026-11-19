@@ -5,10 +5,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createUpdater } from "./updater.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = path.join(__dirname, "..", "server", "index.js");
-const DEFAULTS = { autoStart: false, adbPath: "", port: 8765 };
+const DEFAULTS = { autoStart: false, adbPath: "", port: 8765, skipVersion: "" };
 
 let win = null;
 let child = null;
@@ -28,6 +29,7 @@ function saveSettings() {
   } catch (e) { log(`[desktop] could not save settings: ${e.message}`); }
 }
 const publicSettings = () => ({ ...settings, detectedAdb: findAdb() });
+const updater = createUpdater({ getWindow: () => win, log: (l) => log(l), settings: new Proxy({}, { get: (_t, k) => settings[k], set: (_t, k, v) => { settings[k] = v; return true; } }), saveSettings: () => saveSettings() });
 
 // ---------- adb discovery ----------
 // GUI apps launched from Finder get a minimal PATH, so look in the usual SDK spots too.
@@ -134,7 +136,19 @@ function createWindow() {
 function buildMenu() {
   const isMac = process.platform === "darwin";
   const template = [
-    ...(isMac ? [{ role: "appMenu" }] : []),
+    ...(isMac ? [{
+      label: app.name,
+      submenu: [
+        { role: "about" },
+        { label: "Check for Updates…", click: () => updater.checkNow() },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" }, { role: "hideOthers" }, { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    }] : []),
     {
       label: "Server",
       submenu: [
@@ -157,6 +171,7 @@ function buildMenu() {
       ],
     },
     { role: "windowMenu" },
+    ...(isMac ? [] : [{ label: "Help", submenu: [{ label: "Check for Updates…", click: () => updater.checkNow() }] }]),
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -215,6 +230,8 @@ async function e2eCopyCheck() {
 // Dev runs (`npm run desktop`) keep their own settings and single-instance lock,
 // so they never collide with an installed DevScope.app.
 if (!app.isPackaged) app.setPath("userData", app.getPath("userData") + "-dev");
+// Tests can run a packaged build next to an installed DevScope without sharing its lock/settings.
+if (process.env.DEVSCOPE_USER_DATA) app.setPath("userData", process.env.DEVSCOPE_USER_DATA);
 
 // Single instance: launching DevScope again just focuses the existing window.
 if (!app.requestSingleInstanceLock()) {
@@ -244,6 +261,11 @@ app.whenReady().then(() => {
   if (settings.autoStart || process.env.DEVSCOPE_AUTOSTART === "1") startServer();
   scheduleScreenshot();
   e2eCopyCheck();
+  // Quiet check shortly after launch and every 6 h; only a newer, not skipped release shows a dialog.
+  if (app.isPackaged || process.env.DEVSCOPE_UPDATE_URL) {
+    setTimeout(() => updater.checkInBackground(), Number(process.env.DEVSCOPE_UPDATE_DELAY || 8000));
+    setInterval(() => updater.checkInBackground(), 6 * 60 * 60 * 1000).unref?.();
+  }
   app.on("activate", () => { if (!win) createWindow(); });
 });
 app.on("window-all-closed", () => app.quit());
