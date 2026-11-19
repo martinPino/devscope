@@ -106,7 +106,9 @@ curl -fsSL http://localhost:8765/node/devscope-node.mjs --create-dirs -o ~/.devs
 
 ### Node inside Docker
 
-Same hook, injected through a compose override kept outside the repo — the container just needs to see the file and to reach the Mac:
+Easiest: in the sidebar's **Docker projects** box press **Add project folder…** and choose the folder with your compose file (e.g. `~/nrg-core`). DevScope remembers it, finds the Node services itself (build context with a `package.json`, a `node` image or a node/pnpm/vite command), writes the override below to `~/.devscope/<folder>.devscope.yml`, recreates those services with it, reloads the project's nginx (it caches the old container IP) and opens Chrome once the app answers, so you never land on a 502 page. Chrome opens on the app's address, taken from the compose project's reverse proxy (nginx `server_name` that proxies to the Node service; with several names, the one the app's own sources mention most) or the service's published port; if neither exists, open your app once in that Chrome and DevScope learns the address. Next time just press the project's **▶** button. Clicking the Node process in *Devices* brings that project's Chrome tab to the front (it opens one only if none is open), so you never end up with a pile of windows. To undo, run `docker compose up -d --force-recreate <service>`.
+
+By hand — same hook, injected through a compose override kept outside the repo — the container just needs to see the file and to reach the Mac:
 
 ```yaml
 # ~/.devscope/<project>.devscope.yml

@@ -401,6 +401,28 @@ export function createWebProvider({ devices, recordEvent, broadcast, layouts, sc
     await withTimeout(tgt.client.Page.reload({}), 6000, "reload");
   }
 
+  // Bring the tab showing `url`'s host (else the active tab) to the front, and the window with it.
+  // Returns false when the browser is gone, so the caller can launch a new one.
+  async function focus(serial, url) {
+    const entry = browsers.get(serial);
+    if (!entry || entry.dead) return false;
+    let host = null; try { host = url ? new URL(url).host : null; } catch {}
+    const tabs = [...entry.targets.values()];
+    let tgt = (host && tabs.find((t) => { try { return new URL(t.url).host === host; } catch { return false; } })) || activeTarget(entry);
+    if (!tgt) return false;
+    if (url && host && (() => { try { return new URL(tgt.url).host !== host; } catch { return true; } })()) {
+      await withTimeout(tgt.client.Page.navigate({ url }), 6000, "navigate").catch(() => {});
+    }
+    await withTimeout(tgt.client.Page.bringToFront(), 4000, "bringToFront").catch(() => {});
+    entry.active = tgt.id;
+    // Page.bringToFront picks the tab; on macOS the app itself still has to be raised. Our Chrome
+    // runs its own profile, so it is addressed by PID rather than by bundle id.
+    if (process.platform === "darwin" && entry.proc?.pid) {
+      spawn("osascript", ["-e", `tell application "System Events" to set frontmost of (first process whose unix id is ${entry.proc.pid}) to true`], { stdio: "ignore" }).on("error", () => {});
+    }
+    return true;
+  }
+
   function shutdown() {
     for (const entry of [...browsers.values()]) {
       if (entry.spawned && entry.proc && entry.proc.exitCode === null) { try { entry.proc.kill(); } catch {} }
@@ -410,7 +432,7 @@ export function createWebProvider({ devices, recordEvent, broadcast, layouts, sc
   }
 
   return {
-    launch, attach, close, capture, setWatch, reload, shutdown,
+    launch, attach, close, capture, setWatch, reload, focus, shutdown,
     has: (serial) => browsers.has(serial),
     serials: () => [...browsers.keys()],
     chromePath: findChrome,

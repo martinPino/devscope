@@ -3,6 +3,7 @@ import { WebSocketServer } from "ws";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import http from "node:http";
+import https from "node:https";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -436,6 +437,263 @@ app.post("/api/node/hello", (req, res) => {
   res.set("Access-Control-Allow-Origin", "*").status(204).end();
 });
 
+// ---------- Docker projects: pick a folder once, DevScope does the rest ----------
+// A saved project is a folder with a compose file. "Connect" finds its Node services, writes
+// ~/.devscope/<folder>.devscope.yml (hook mounted + DEVSCOPE_URL), recreates those services and
+// opens Chrome. The app URL is learned from the first page opened in that Chrome, then reused.
+const DOCKER_ENV = { ...process.env, PATH: [process.env.PATH, "/usr/local/bin", "/opt/homebrew/bin", "/Applications/Docker.app/Contents/Resources/bin"].filter(Boolean).join(path.delimiter) };
+const PROJECTS_FILE = path.join(os.homedir(), ".devscope", "projects.json");
+let projects = [];
+try { projects = JSON.parse(fs.readFileSync(PROJECTS_FILE, "utf8")); } catch { /* none yet */ }
+const saveProjects = () => { try { fs.mkdirSync(path.dirname(PROJECTS_FILE), { recursive: true }); fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projects.map(({ dir, url, lastUrl }) => ({ dir, url: url || null, lastUrl: lastUrl || null })), null, 2)); } catch (e) { console.warn(`[docker] could not save projects: ${e.message}`); } };
+const learning = new Map(); // chrome serial -> project dir whose URL we are waiting to learn
+const httpError = (message, status = 400) => Object.assign(new Error(message), { status });
+const dockerErr = (e) => httpError(e.code === "ENOENT" ? "Docker CLI not found — is Docker Desktop / OrbStack installed?" : String(e.stderr || e.message).trim().split("\n").slice(-6).join("\n"), 500);
+
+function composeFiles(dir) {
+  const pick = (names) => names.filter((n) => fs.existsSync(path.join(dir, n))).slice(0, 1);
+  const base = pick(["compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"]);
+  if (!base.length && !process.env.COMPOSE_FILE) throw httpError("No docker compose file in that folder.");
+  return [...base, ...pick(["compose.override.yaml", "compose.override.yml", "docker-compose.override.yml", "docker-compose.override.yaml"])];
+}
+const composeArgs = (dir, ...rest) => ["compose", ...(process.env.COMPOSE_FILE ? [] : composeFiles(dir).flatMap((f) => ["-f", f])), ...rest];
+// Services that run Node: build context with a package.json, a node image, or a node-ish command.
+async function composeConfig(dir) {
+  const { stdout } = await exec("docker", composeArgs(dir, "config", "--format", "json"), { cwd: dir, env: DOCKER_ENV, timeout: 30000, maxBuffer: 16 * 1024 * 1024 }).catch((e) => { throw dockerErr(e); });
+  return JSON.parse(stdout);
+}
+function nodeServices(dir, cfg) {
+  const cmdText = (v) => (Array.isArray(v) ? v.join(" ") : String(v || ""));
+  return Object.entries(cfg.services || {}).filter(([, svc]) => {
+    const ctx = typeof svc.build === "string" ? svc.build : svc.build?.context;
+    if (ctx && fs.existsSync(path.join(path.resolve(dir, ctx), "package.json"))) return true;
+    if (/(^|\/)node(:|$)/.test(String(svc.image || ""))) return true;
+    return /\b(node|pnpm|npm|npx|yarn|vite|next)\b/.test(cmdText(svc.command) + " " + cmdText(svc.entrypoint));
+  }).map(([name]) => name);
+}
+// The address the app is served on: a reverse proxy in the compose file (nginx server blocks that
+// proxy_pass to the Node service) wins; otherwise the service's published port on localhost.
+function confFiles(cfg) {
+  const out = [];
+  const walk = (p, depth) => {
+    try {
+      const st = fs.statSync(p);
+      if (st.isFile()) { if (/\.conf$/.test(p)) out.push(p); }
+      else if (st.isDirectory() && depth < 3) for (const n of fs.readdirSync(p)) { if (out.length < 200 && n !== "node_modules") walk(path.join(p, n), depth + 1); }
+    } catch { /* unreadable */ }
+  };
+  for (const svc of Object.values(cfg.services || {})) {
+    for (const v of svc.volumes || []) if (v.type === "bind" && v.source && /nginx|conf|caddy|proxy/i.test(String(v.target) + String(v.source))) walk(v.source, 0);
+  }
+  return out;
+}
+function serverBlocks(text) {
+  const blocks = [];
+  const re = /\bserver\s*\{/g;
+  let m;
+  while ((m = re.exec(text))) {
+    let depth = 1, i = re.lastIndex;
+    while (i < text.length && depth) { const c = text[i++]; if (c === "{") depth++; else if (c === "}") depth--; }
+    blocks.push(text.slice(re.lastIndex, i));
+    re.lastIndex = i;
+  }
+  return blocks;
+}
+// A proxy block often lists several hostnames (strom.…, gas.…). Prefer the one the app's own
+// sources mention most (start scripts, configs, .env), so the product the team works on wins.
+function mentionScores(dir, names) {
+  const score = Object.fromEntries(names.map((n) => [n, 0]));
+  let files = 0;
+  const walk = (p, depth) => {
+    if (files > 400) return;
+    let st; try { st = fs.statSync(p); } catch { return; }
+    if (st.isDirectory()) {
+      if (depth > 3) return;
+      let list = []; try { list = fs.readdirSync(p); } catch { return; }
+      for (const n of list) if (!/^(node_modules|\.git|build|dist|coverage|storybook-static.*|public)$/.test(n)) walk(path.join(p, n), depth + 1);
+    } else if (st.size < 200 * 1024 && /\.(sh|env|ts|js|mjs|json|ya?ml|md|conf|dockerfile)$|^(Dockerfile|\.env.*)$/i.test(path.basename(p))) {
+      files++;
+      let text = ""; try { text = fs.readFileSync(p, "utf8"); } catch { return; }
+      for (const n of names) {
+        const re = new RegExp(`(^|[^A-Za-z0-9.-])${n.replace(/\./g, "\\.")}(?![A-Za-z0-9-])`, "g");
+        score[n] += (text.match(re) || []).length;
+      }
+    }
+  };
+  walk(dir, 0);
+  return score;
+}
+function deriveUrl(cfg, services, dir) {
+  const found = [];
+  for (const file of confFiles(cfg)) {
+    let text = ""; try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
+    for (const block of serverBlocks(text)) {
+      const upstream = [...block.matchAll(/proxy_pass\s+https?:\/\/([A-Za-z0-9_.-]+)/g)].map((m) => m[1]);
+      const names = (block.match(/server_name\s+([^;]+);/)?.[1] || "").split(/\s+/).filter((n) => n && !/[*~_$]/.test(n));
+      const listen = block.match(/listen\s+(?:\[::\]:)?(\d+)([^;]*);/);
+      if (!names.length || !listen) continue;
+      const port = Number(listen[1]), tls = /\bssl\b/.test(listen[2]) || port === 443;
+      for (const up of upstream) if (services.includes(up)) found.push({ service: up, names, tls, port });
+    }
+  }
+  for (const svc of services) {
+    const hit = found.find((f) => f.service === svc);
+    if (!hit) continue;
+    const ctx = typeof cfg.services[svc].build === "string" ? cfg.services[svc].build : cfg.services[svc].build?.context;
+    const scores = ctx ? mentionScores(path.resolve(dir, ctx), hit.names) : {};
+    const name = [...hit.names].sort((x, y) => (scores[y] || 0) - (scores[x] || 0))[0];
+    return `${hit.tls ? "https" : "http"}://${name}${hit.port === (hit.tls ? 443 : 80) ? "" : `:${hit.port}`}/`;
+  }
+  for (const svc of services) {
+    const pub = (cfg.services[svc].ports || []).find((p) => p.published);
+    if (pub) return `http://localhost:${pub.published}/`;
+  }
+  return null;
+}
+// A recreated container gets a new IP and nginx resolves `proxy_pass http://svc` only at start,
+// so reload any nginx in the project; then hold back Chrome until the app answers (no 502 page).
+async function reloadProxies(dir, cfg) {
+  for (const [name, svc] of Object.entries(cfg.services || {})) {
+    if (!/nginx/i.test(String(svc.image || ""))) continue;
+    await exec("docker", composeArgs(dir, "exec", "-T", name, "nginx", "-s", "reload"), { cwd: dir, env: DOCKER_ENV, timeout: 20000 }).catch((e) => console.warn(`[docker] could not reload ${name}: ${String(e.stderr || e.message).trim().split("\n")[0]}`));
+  }
+}
+function probe(url) {
+  return new Promise((resolve) => {
+    const mod = url.startsWith("https:") ? https : http;
+    const req = mod.get(url, { rejectUnauthorized: false, timeout: 20000, headers: { "user-agent": "DevScope" } }, (res) => { res.resume(); resolve({ status: res.statusCode }); });
+    req.on("timeout", () => { req.destroy(); resolve({ status: 0 }); });
+    req.on("error", (e) => resolve({ status: 0, code: e.code }));
+  });
+}
+async function waitForApp(url, timeoutMs = 4 * 60 * 1000) {
+  const deadline = Date.now() + timeoutMs;
+  let ok = 0; // two answers in a row, so a proxy or port that is still flapping does not count
+  while (Date.now() < deadline) {
+    const r = await probe(url);
+    if (r.code === "ENOTFOUND") return false; // hostname not resolvable here: nothing to wait on
+    ok = r.status && r.status < 500 ? ok + 1 : 0;
+    if (ok >= 2) return true;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  return false;
+}
+function pickFolder() {
+  return new Promise((resolve, reject) => {
+    const [cmd, args] = process.platform === "darwin"
+      ? ["osascript", ["-e", 'POSIX path of (choose folder with prompt "Select the project folder that contains your docker compose file")']]
+      : ["zenity", ["--file-selection", "--directory", "--title=Select the project folder with your docker compose file"]];
+    execFile(cmd, args, { timeout: 5 * 60 * 1000 }, (err, stdout) => {
+      if (err) return err.code === 1 ? resolve(null) : reject(httpError("Could not open a folder picker on this system.", 500));
+      resolve(stdout.trim().replace(/\/$/, "") || null);
+    });
+  });
+}
+const publicProject = (p) => ({ dir: p.dir, name: path.basename(p.dir), url: p.url || null });
+app.get("/api/projects", (_req, res) => res.json(projects.map(publicProject)));
+app.post("/api/projects/add", async (_req, res) => {
+  try {
+    const dir = await pickFolder();
+    if (!dir) return res.json({ cancelled: true });
+    composeFiles(dir);
+    if (!projects.some((p) => p.dir === dir)) { projects.push({ dir, url: null }); saveProjects(); }
+    res.json(publicProject(projects.find((p) => p.dir === dir)));
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.delete("/api/projects", (req, res) => {
+  projects = projects.filter((p) => p.dir !== req.body?.dir);
+  saveProjects();
+  res.status(204).end();
+});
+// One Chrome per project: reuse (and bring forward) the one DevScope opened before, else launch.
+const projectChrome = new Map(); // project dir -> chrome serial
+const opening = new Map(); // project dir -> in-flight open, so quick double clicks share one Chrome
+function openProjectChrome(project, url) {
+  if (!opening.has(project.dir)) opening.set(project.dir, openProjectChromeNow(project, url).finally(() => opening.delete(project.dir)));
+  return opening.get(project.dir);
+}
+async function openProjectChromeNow(project, url) {
+  const hostOf = (u) => { try { return new URL(u).host; } catch { return null; } };
+  const known = projectChrome.get(project.dir)
+    // after a DevScope restart: an attached Chrome already showing the app counts too
+    || web.serials().find((sr) => url && hostOf(devices.get(sr)?.url) === hostOf(url));
+  if (known && (await web.focus(known, url))) { projectChrome.set(project.dir, known); return known; }
+  // DevScope restarted while its Chrome stayed open: re-attach the debug ports it uses (9222+).
+  if (url) {
+    for (let port = 9222; port < 9232; port++) {
+      const sr = await web.attach({ port }).catch(() => null);
+      if (!sr) continue;
+      await new Promise((r) => setTimeout(r, 300));
+      if (hostOf(devices.get(sr)?.url) === hostOf(url) && (await web.focus(sr, url))) { projectChrome.set(project.dir, sr); return sr; }
+    }
+  }
+  const serial = await web.launch({ url: url || undefined });
+  projectChrome.set(project.dir, serial);
+  return serial;
+}
+// Node device -> project: the hook reports the container hostname, which is the short container id.
+async function projectForNode(dev) {
+  if (projects.length === 1) return projects[0];
+  for (const p of projects) {
+    try {
+      const { stdout } = await exec("docker", composeArgs(p.dir, "ps", "-q"), { cwd: p.dir, env: DOCKER_ENV, timeout: 10000 });
+      if (dev.host && stdout.split("\n").some((id) => id && id.startsWith(dev.host))) return p;
+    } catch { /* not a running project */ }
+  }
+  return null;
+}
+app.post("/api/node/focus", async (req, res) => {
+  try {
+    const dev = devices.get(req.body?.serial);
+    if (!dev || dev.platform !== "node") throw httpError("Unknown Node process", 404);
+    const project = await projectForNode(dev);
+    if (!project) return res.json({ ok: false, reason: "no-project" });
+    let url = project.url || project.lastUrl || null;
+    if (!url) { try { const cfg = await composeConfig(project.dir); url = project.lastUrl = deriveUrl(cfg, nodeServices(project.dir, cfg), project.dir); } catch { /* open blank */ } }
+    const serial = await openProjectChrome(project, url);
+    res.json({ ok: true, serial });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+const connecting = new Set(); // project dirs with a connect in flight
+app.post("/api/projects/connect", async (req, res) => {
+  if (connecting.has(req.body?.dir)) return res.status(409).json({ error: "This project is already starting — Chrome opens when the app answers." });
+  connecting.add(req.body?.dir);
+  try {
+    const project = projects.find((p) => p.dir === req.body?.dir);
+    if (!project) throw httpError("Unknown project", 404);
+    const dir = project.dir;
+    const cfg = await composeConfig(dir);
+    const services = nodeServices(dir, cfg);
+    const appUrl = project.url || deriveUrl(cfg, services, dir);
+    if (!services.length) throw httpError("No Node service found in this project's compose file.");
+    const override = path.join(os.homedir(), ".devscope", `${path.basename(dir).replace(/[^A-Za-z0-9_.-]/g, "-")}.devscope.yml`);
+    fs.mkdirSync(path.dirname(override), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, "..", "node", "devscope-node.mjs"), NODE_HOOK);
+    fs.writeFileSync(override, `# Generated by DevScope — preloads the Node hook. Undo: docker compose up -d --force-recreate ${services.join(" ")}
+services:
+${services.map((svc) => `  ${svc}:
+    environment:
+      NODE_OPTIONS: "--import /devscope/devscope-node.mjs"
+      DEVSCOPE_URL: "http://host.docker.internal:${PORT}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - \${HOME}/.devscope:/devscope:ro
+`).join("")}`);
+    const args = composeArgs(dir, "-f", override, "up", "-d", "--force-recreate", ...services);
+    console.log(`[docker] docker ${args.join(" ")} (in ${dir})`);
+    await exec("docker", args, { cwd: dir, env: DOCKER_ENV, timeout: 300000 }).catch((e) => { throw dockerErr(e); });
+    await reloadProxies(dir, cfg);
+    if (appUrl) await waitForApp(appUrl);
+    if (project.lastUrl !== appUrl) { project.lastUrl = appUrl; saveProjects(); }
+    let serial = null;
+    try { serial = await openProjectChrome(project, appUrl); } catch (e) { console.warn(`[docker] connected, but Chrome did not open: ${e.message}`); }
+    if (serial && !appUrl) learning.set(serial, dir);
+    res.json({ ok: true, services, url: appUrl, chrome: !!serial, serial });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+  finally { connecting.delete(req.body?.dir); }
+});
+
 app.get("/api/state", (_req, res) => {
   res.json({ adbAvailable, devices: [...devices.values()], events });
 });
@@ -444,6 +702,11 @@ function recordEvent(raw, serial = null) {
   const ev = normalizeEvent(raw);
   if (!serial && raw?.platform === "node" && raw.nodeId) serial = upsertNode(raw);
   ev.device = serial ?? matchDevice(ev);
+  if (ev.resourceType === "Document" && learning.has(ev.device) && ev.status && ev.status < 400 && /^https?:/.test(ev.url)) {
+    const project = projects.find((p) => p.dir === learning.get(ev.device));
+    learning.delete(ev.device);
+    if (project && !project.url) { project.url = ev.url; saveProjects(); }
+  }
   events.push(ev);
   if (events.length > MAX_EVENTS) events.shift();
   broadcast({ type: "network", event: ev });

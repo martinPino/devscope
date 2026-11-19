@@ -71,6 +71,10 @@
   .webbar button { width: 100%; }
   .webbar .hint { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 0; }
   .webbar .hint.err { color: var(--err); }
+  .webbar .proj { display: flex; align-items: center; gap: 6px; }
+  .webbar .proj button { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .webbar .proj .close { cursor: pointer; color: var(--muted); }
+  .webbar .proj .close:hover { color: var(--err); }
   .empty { color: var(--muted); padding: 8px 16px; font-size: 12px; }
   .empty code { font-family: var(--mono); color: var(--text); }
 
@@ -217,6 +221,11 @@
       <h2 style="margin:10px 0 2px">Node dev server / backend</h2>
       <p class="hint">See the calls your loaders or BFF make to the backend: start the process with the DevScope hook preloaded — nothing to add to the repo.</p>
       <div class="cmd"><code id="nodeCmd">NODE_OPTIONS="--import $HOME/.devscope/devscope-node.mjs" npm run dev</code><button id="nodeCmdCopy">Copy</button></div>
+      <h2 style="margin:10px 0 2px">Docker projects</h2>
+      <p class="hint">Pick the folder of your docker compose project once. DevScope hooks its Node services and opens Chrome.</p>
+      <div id="projects"></div>
+      <button id="projectAdd" title="Choose a project folder">Add project folder…</button>
+      <p class="hint" id="dockerHint"></p>
       <p class="hint">Missing module error? DevScope writes that file when it starts; you can also fetch it: <code id="nodeFetchCmd">curl -fsSL http://localhost:8765/node/devscope-node.mjs --create-dirs -o ~/.devscope/devscope-node.mjs</code></p>
     </div>
   </aside>
@@ -336,7 +345,13 @@ function renderDevices() {
       ${d.hint ? `<div class="meta hintline">${esc(d.hint)}</div>` : ""}
       ${d.note && state.selectedDevice === d.serial ? `<div class="meta noteline">${esc(d.note)}</div>` : ""}
     </button>`).join("");
-  box.querySelectorAll(".device").forEach((b) => b.onclick = () => { state.selectedDevice = b.dataset.serial || null; renderDevices(); renderList(); renderLayout(); sendWatch(); });
+  box.querySelectorAll(".device").forEach((b) => b.onclick = () => {
+    state.selectedDevice = b.dataset.serial || null; renderDevices(); renderList(); renderLayout(); sendWatch();
+    // A Node process of a Docker project: bring its Chrome tab forward (or open it) — never a second window.
+    if (state.devices.find((d) => d.serial === b.dataset.serial)?.platform === "node") {
+      fetch("/api/node/focus", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ serial: b.dataset.serial }) }).catch(() => {});
+    }
+  });
   box.querySelectorAll("[data-reloadweb]").forEach((x) => x.onclick = (ev) => {
     ev.stopPropagation();
     fetch("/api/web/reload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ serial: x.dataset.reloadweb }) });
@@ -839,6 +854,45 @@ function highlight(json) {
   const cmd = $("#nodeCmd");
   if (location.port && location.port !== "8765") cmd.textContent = `DEVSCOPE_URL=${location.origin} ${cmd.textContent}`;
   $("#nodeFetchCmd").textContent = `curl -fsSL ${location.origin}/node/devscope-node.mjs --create-dirs -o ~/.devscope/devscope-node.mjs`;
+  // Docker projects: saved server-side; one click connects (recreate services with the hook) and opens Chrome.
+  const pList = $("#projects"), pAdd = $("#projectAdd"), dHint = $("#dockerHint");
+  const dSet = (t, err) => { dHint.textContent = t; dHint.classList.toggle("err", !!err); };
+  const call = async (url, method = "GET", body) => {
+    const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+    const j = r.status === 204 ? {} : await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    return j;
+  };
+  const renderProjects = async () => {
+    try {
+      const list = await call("/api/projects");
+      pList.innerHTML = list.map((p) => `<div class="proj"><button class="primary" data-dir="${esc(p.dir)}" title="${esc(p.dir)}">▶ ${esc(p.name)}</button><span class="close" role="button" data-rm="${esc(p.dir)}" title="Remove from DevScope">✕</span></div>`).join("");
+      pList.querySelectorAll("[data-dir]").forEach((b) => { b.onclick = () => connect(b.dataset.dir); });
+      pList.querySelectorAll("[data-rm]").forEach((x) => { x.onclick = async () => { await call("/api/projects", "DELETE", { dir: x.dataset.rm }).catch(() => {}); renderProjects(); }; });
+    } catch {}
+  };
+  const connect = async (dir) => {
+    pList.querySelectorAll("button").forEach((b) => { b.disabled = true; }); pAdd.disabled = true;
+    dSet("Restarting the Node services with the DevScope hook and waiting until the app answers… (can take a few minutes)", false);
+    try {
+      const j = await call("/api/projects/connect", "POST", { dir });
+      if (j.serial) state.selectedDevice = j.serial;
+      dSet(`Connected: ${j.services.join(", ")}.${j.chrome ? (j.url ? "" : " Open your app in the Chrome that just opened — DevScope remembers the address.") : " Chrome did not open; use Open Chrome above."}`, false);
+      renderDevices(); renderList(); renderLayout();
+    } catch (e) { dSet(e.message, true); }
+    pAdd.disabled = false; renderProjects();
+  };
+  pAdd.onclick = async () => {
+    pAdd.disabled = true; dSet("Choose the folder in the dialog…", false);
+    try {
+      const j = await call("/api/projects/add", "POST");
+      if (j.cancelled) { dSet("", false); pAdd.disabled = false; return; }
+      await renderProjects();
+      pAdd.disabled = false;
+      await connect(j.dir);
+    } catch (e) { dSet(e.message, true); pAdd.disabled = false; }
+  };
+  renderProjects();
   $("#nodeCmdCopy").onclick = (ev) => copyWithFeedback(ev.currentTarget, cmd.textContent, cmd);
 })();
 
