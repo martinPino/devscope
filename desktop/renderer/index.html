@@ -60,6 +60,17 @@
   @media (max-width: 900px) { .adb, label.check { display: none; } header { gap: 10px; } }
   @media (max-width: 640px) { #openExternal { display: none; } header { padding-right: 10px; } }
   @media (max-width: 480px) { .status #statusText { display: none; } }
+  #upd { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(8, 10, 14, .62); padding: 16px; -webkit-app-region: no-drag; }
+  #upd .card { width: min(440px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 24px; box-shadow: 0 24px 70px rgba(0,0,0,.55); text-align: center; }
+  #upd .logo { width: 48px; height: 48px; border-radius: 12px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font: 700 20px var(--mono); margin: 0 auto 12px; }
+  #upd h2 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
+  #upd .sub { color: var(--muted); margin: 0 0 12px; }
+  #upd .notes { text-align: left; max-height: 160px; overflow: auto; white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #c7cdd8; margin: 0 0 16px; }
+  #upd .bar { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; margin: 0 0 16px; }
+  #upd .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+  #upd .err { color: var(--err); font-size: 12px; margin: 0 0 12px; }
+  #upd .row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  #upd .go { padding: 8px 22px; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -90,6 +101,22 @@
   </aside>
 </main>
 
+<div id="upd" hidden role="dialog" aria-modal="true" aria-labelledby="updTitle">
+  <div class="card">
+    <div class="logo">{ }</div>
+    <h2 id="updTitle">Update available</h2>
+    <p class="sub" id="updSub"></p>
+    <pre class="notes" id="updNotes"></pre>
+    <div class="bar" id="updBar" hidden><i></i></div>
+    <p class="err" id="updErr" hidden></p>
+    <div class="row">
+      <button id="updGo" class="primary go">Update now</button>
+      <button id="updLater">Later</button>
+      <button id="updNotesBtn">Release notes</button>
+      <button id="updSkip">Skip this version</button>
+    </div>
+  </div>
+</div>
 <script src="app.js"></script>
 </body>
 </html>

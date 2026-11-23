@@ -3,7 +3,7 @@
 // release, download the zip for this Mac's architecture, verify it against SHA256SUMS.txt, unpack
 // it with ditto and, once DevScope has quit, swap the .app bundle in place and relaunch it.
 // Files fetched by Node carry no quarantine flag, so Gatekeeper does not stop the new version.
-import { app, dialog, shell } from "electron";
+import { app, dialog, ipcMain, shell } from "electron";
 import { spawn, execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -36,6 +36,9 @@ function currentBundle() {
 
 export function createUpdater({ getWindow, log, settings, saveSettings }) {
   let busy = false;
+  let pending = null; // the release the in-app "Update available" card is showing
+  const send = (channel, payload) => { const w = getWindow(); if (w && !w.isDestroyed()) w.webContents.send(channel, payload); };
+  const card = () => pending && ({ version: pending.rel.version, current: app.getVersion(), notes: plainNotes(pending.rel.notes), canSkip: !pending.interactive });
 
   async function latest() {
     const res = await fetch(LATEST_URL, { headers: { accept: "application/vnd.github+json", "user-agent": "DevScope" }, signal: AbortSignal.timeout(15000) });
@@ -83,7 +86,7 @@ export function createUpdater({ getWindow, log, settings, saveSettings }) {
   async function prepareAndSwap(rel, bundle, zip, sums, zipName, work, win) {
     const zipFile = path.join(work, zipName);
     log(`[update] downloading ${zipName}`);
-    const sha = await download(zip.browser_download_url, zipFile, (f) => win?.setProgressBar(f));
+    const sha = await download(zip.browser_download_url, zipFile, (f) => { win?.setProgressBar(f); send("update:progress", f); });
     win?.setProgressBar(-1);
     if (sums) {
       const text = await (await fetch(sums.browser_download_url, { headers: { "user-agent": "DevScope" } })).text();
@@ -127,7 +130,14 @@ rm -rf "${work}"
       }
       if (!interactive && settings.skipVersion === rel.version) return;
       const auto = process.env.DEVSCOPE_UPDATE_AUTO === "1"; // tests: accept without a click
-      const { response } = auto ? { response: 0 } : await dialog.showMessageBox(win, {
+      if (auto) { await install(rel); return; }
+      if (win && !win.isDestroyed()) { // centered in-app card with an "Update now" button
+        pending = { rel, interactive };
+        win.show(); win.focus();
+        send("update:available", card());
+        return;
+      }
+      const { response } = await dialog.showMessageBox(win, {
         type: "info",
         message: `DevScope ${rel.version} is available`,
         detail: `You have ${current}.\n\n${plainNotes(rel.notes)}`,
@@ -143,6 +153,19 @@ rm -rf "${work}"
       if (interactive) await dialog.showMessageBox(win, { type: "error", message: "Could not update DevScope", detail: e.message });
     } finally { busy = false; }
   }
+
+  ipcMain.handle("update:pending", () => card());
+  ipcMain.handle("update:install", async () => {
+    if (!pending) return;
+    const { rel } = pending;
+    try { await install(rel); send("update:close"); pending = null; }
+    catch (e) { log(`[update] ${e.message}`); getWindow()?.setProgressBar(-1); send("update:error", e.message); }
+  });
+  ipcMain.handle("update:notes", () => pending && shell.openExternal(pending.rel.page));
+  ipcMain.handle("update:dismiss", (_e, skip) => {
+    if (pending && skip) { settings.skipVersion = pending.rel.version; saveSettings(); }
+    pending = null;
+  });
 
   return {
     checkNow: () => check({ interactive: true }),

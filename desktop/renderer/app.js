@@ -74,4 +74,38 @@ $("#chooseAdb").onclick = () => api.chooseAdb();
 $("#toggleLogs").onclick = () => { $("#logs").hidden = !$("#logs").hidden; };
 $("#closeLogs").onclick = () => { $("#logs").hidden = true; };
 $("#clearLogs").onclick = () => { $("#logBody").textContent = ""; };
+
+// ---------- update card (centered, with "Update now") ----------
+const upd = api.update;
+function showUpdate(u) {
+  if (!u) return;
+  $("#updTitle").textContent = `DevScope ${u.version} is available`;
+  $("#updSub").textContent = `You have ${u.current}.`;
+  $("#updNotes").textContent = u.notes; $("#updNotes").hidden = !u.notes;
+  $("#updSkip").hidden = !u.canSkip;
+  $("#updBar").hidden = true; $("#updBar i").style.width = "0"; $("#updErr").hidden = true;
+  for (const id of ["#updGo", "#updLater", "#updNotesBtn", "#updSkip"]) $(id).disabled = false;
+  $("#updGo").textContent = "Update now";
+  $("#upd").hidden = false; $("#updGo").focus();
+}
+const hideUpdate = (skip) => { $("#upd").hidden = true; upd.dismiss(skip); };
+$("#updGo").onclick = () => {
+  for (const id of ["#updGo", "#updLater", "#updNotesBtn", "#updSkip"]) $(id).disabled = true;
+  $("#updGo").textContent = "Updating…"; $("#updErr").hidden = true; $("#updBar").hidden = false;
+  upd.install();
+};
+$("#updLater").onclick = () => hideUpdate(false);
+$("#updSkip").onclick = () => hideUpdate(true);
+$("#updNotesBtn").onclick = () => upd.notes();
+upd.onAvailable(showUpdate);
+upd.onProgress((f) => { $("#updBar i").style.width = `${Math.round(f * 100)}%`; });
+upd.onError((m) => {
+  $("#updErr").textContent = `Could not update: ${m}`; $("#updErr").hidden = false; $("#updBar").hidden = true;
+  for (const id of ["#updGo", "#updLater", "#updNotesBtn", "#updSkip"]) $(id).disabled = false;
+  $("#updGo").textContent = "Try again";
+});
+upd.onClose(() => { $("#upd").hidden = true; });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#upd").hidden && !$("#updGo").disabled) hideUpdate(false); });
+upd.pending().then(showUpdate);
+
 init();
