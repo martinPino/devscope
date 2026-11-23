@@ -64,11 +64,18 @@ function setState(patch) {
   win?.webContents.send("state", state);
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function probe(port) {
+// The server binds the wildcard address, so another app can hold 127.0.0.1:<port> while
+// DevScope answers on [::1]. Probe both and only accept a real DevScope response.
+async function probeHost(host, port) {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/state`, { signal: AbortSignal.timeout(800) });
-    return res.ok;
+    const res = await fetch(`http://${host}:${port}/api/state`, { signal: AbortSignal.timeout(800) });
+    if (!res.ok) return false;
+    const body = await res.json();
+    return Array.isArray(body?.devices);
   } catch { return false; }
+}
+async function probe(port) {
+  return (await Promise.all([probeHost("127.0.0.1", port), probeHost("[::1]", port)])).some(Boolean);
 }
 
 async function startServer() {
@@ -103,7 +110,7 @@ async function startServer() {
     await sleep(150);
     if (await probe(port)) { setState({ status: "running", url }); return; }
   }
-  if (child) setState({ error: "Server did not answer in time — see logs" });
+  if (child) setState({ error: `Server did not answer in time — is another app using port ${port}? See logs` });
 }
 
 function stopServer() {
