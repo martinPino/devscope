@@ -56,6 +56,10 @@
   #logs .head { display: flex; align-items: center; gap: 10px; padding: 4px 12px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); }
   #logs .head button { padding: 1px 7px; font-size: 11px; }
   #logs pre { flex: 1; margin: 0; padding: 8px 12px; overflow: auto; font: 11.5px/1.5 var(--mono); color: #c7cdd8; white-space: pre-wrap; word-break: break-word; }
+  header button, label.check, .status { white-space: nowrap; }
+  @media (max-width: 900px) { .adb, label.check { display: none; } header { gap: 10px; } }
+  @media (max-width: 640px) { #openExternal { display: none; } header { padding-right: 10px; } }
+  @media (max-width: 480px) { .status #statusText { display: none; } }
 </style>
 </head>
 <body>

@@ -189,13 +189,41 @@
   .muted { color: var(--muted); font-size: 12px; }
   .spacer { flex: 1; }
   #list .empty a { color: var(--accent); }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; } #detail, #lside, .splitter { display: none; } }
+  #sideToggle, #detailBack { display: none; }
+  /* Narrow windows: one column. Header wraps, the sidebar becomes a toggleable drawer, and the
+     request detail opens full-width over the list (with a Back button) instead of vanishing. */
+  @media (max-width: 900px) {
+    #app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); height: 100vh; height: 100dvh; }
+    header { flex-wrap: wrap; gap: 8px 10px; padding: 8px 12px; }
+    header h1 { margin-right: 0; }
+    header .spacer { display: none; }
+    #sideToggle { display: inline-block; }
+    #adb span:last-child { white-space: nowrap; }
+    #filter, #search { flex: 1 1 150px; width: auto; min-width: 0; }
+    header button, #count { white-space: nowrap; }
+    aside { display: none; border-right: 0; border-bottom: 1px solid var(--line); max-height: 50vh; }
+    #app.side-open aside { display: block; }
+    main { grid-template-columns: minmax(0, 1fr); position: relative; overflow: hidden; }
+    .splitter { display: none; }
+    #detail { position: absolute; inset: 0; background: var(--bg); z-index: 2; display: none; }
+    main.show-detail #detail { display: flex; }
+    #detailBack { display: inline-block; padding: 2px 9px; font-size: 12px; }
+    #lside { display: none; }
+    #detail .head .stats { flex-wrap: wrap; gap: 4px 12px; }
+    dialog { width: 96vw; }
+  }
+  @media (max-width: 640px) { #list td:nth-child(5), #list thead th:nth-child(5) { display: none; } }
+  @media (max-width: 520px) {
+    #list td:nth-child(4), #list thead th:nth-child(4) { display: none; }
+    #matches { display: none; }
+  }
 </style>
 </head>
 <body>
 <div id="app">
   <header>
     <h1>DevScope</h1>
+    <button id="sideToggle" aria-expanded="false" aria-controls="sidebar" title="Show devices and setup">☰ Devices</button>
     <nav class="pages">
       <button data-page="network" class="active">Network</button>
       <button data-page="layout">Layout</button>
@@ -210,7 +238,7 @@
     <button id="clear">Clear</button>
   </header>
 
-  <aside>
+  <aside id="sidebar">
     <h2>Devices</h2>
     <div id="devices"></div>
     <div class="webbar">
@@ -592,6 +620,7 @@ function renderList() {
 
 function selectEvent(id) {
   state.selectedEvent = state.events.find((e) => e.id === id) || null;
+  $("main").classList.toggle("show-detail", !!state.selectedEvent);
   $("#rows").querySelectorAll("tbody tr").forEach((r) => r.classList.toggle("selected", r.dataset.id === id));
   renderDetail();
 }
@@ -599,11 +628,11 @@ function selectEvent(id) {
 function renderDetail() {
   const d = $("#detail");
   const e = state.selectedEvent;
-  if (!e) { d.innerHTML = `<div class="empty" style="padding:40px 24px;text-align:center">Select a request to inspect it.</div>`; return; }
+  if (!e) { $("main").classList.remove("show-detail"); d.innerHTML = `<div class="empty" style="padding:40px 24px;text-align:center">Select a request to inspect it.</div>`; return; }
   const dev = state.devices.find((x) => x.serial === e.device);
   d.innerHTML = `
     <div class="head">
-      <div class="line1"><span class="m m-${e.method}" style="font-size:13px">${e.method}</span>${statusHtml(e)}
+      <div class="line1"><button id="detailBack" title="Back to the request list">← Requests</button><span class="m m-${e.method}" style="font-size:13px">${e.method}</span>${statusHtml(e)}
         <span class="actions">
           <button id="copyPane" title="Copy the ${state.tab} tab as text">Copy</button>
           <button id="copyCurl" title="Copy this request as a curl command">cURL</button>
@@ -627,6 +656,7 @@ function renderDetail() {
     <div id="pane">${markMatches(paneHtml(e), state.search.trim())}</div>`;
   d.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => { state.tab = b.dataset.tab; renderDetail(); });
   d.querySelectorAll("[data-view]").forEach((b) => b.onclick = () => { state.bodyView = b.dataset.view; renderDetail(); });
+  $("#detailBack").onclick = () => $("main").classList.remove("show-detail");
   $("#copyPane").onclick = (ev) => copyWithFeedback(ev.currentTarget, paneText(e), $("#pane"));
   $("#copyCurl").onclick = (ev) => copyWithFeedback(ev.currentTarget, curlFor(e), null);
   updateMatches();
@@ -969,6 +999,10 @@ function jumpMatch(dir) {
 }
 
 // ---------- controls ----------
+$("#sideToggle").onclick = (ev) => {
+  const open = $("#app").classList.toggle("side-open");
+  ev.currentTarget.setAttribute("aria-expanded", String(open));
+};
 document.querySelectorAll(".pages button").forEach((b) => b.onclick = () => {
   state.page = b.dataset.page;
   document.querySelectorAll(".pages button").forEach((x) => x.classList.toggle("active", x === b));
