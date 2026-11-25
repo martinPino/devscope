@@ -85,11 +85,16 @@ function showUpdate(u) {
   $("#updSkip").hidden = !u.canSkip;
   $("#updBar").hidden = true; $("#updBar i").style.width = "0"; $("#updErr").hidden = true;
   for (const id of ["#updGo", "#updLater", "#updNotesBtn", "#updSkip"]) $(id).disabled = false;
-  $("#updGo").textContent = "Update now";
+  $("#updGo").textContent = u.failed ? "Download manually" : "Update now";
+  if (u.failed) {
+    $("#updTitle").textContent = `DevScope ${u.version} could not be installed`;
+    $("#updSub").textContent = `Still on ${u.current}. The automatic swap did not apply. Download the dmg from the release page and drag it into Applications. Details: ${u.logPath}`;
+  }
   $("#upd").hidden = false; $("#updGo").focus();
 }
 const hideUpdate = (skip) => { $("#upd").hidden = true; upd.dismiss(skip); };
 $("#updGo").onclick = () => {
+  if ($("#updGo").textContent === "Download manually") { upd.install(); return; }
   for (const id of ["#updGo", "#updLater", "#updNotesBtn", "#updSkip"]) $(id).disabled = true;
   $("#updGo").textContent = "Updating…"; $("#updErr").hidden = true; $("#updBar").hidden = false;
   upd.install();

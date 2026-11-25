@@ -34,11 +34,13 @@ function currentBundle() {
   return p.endsWith(".app") ? p : null;
 }
 
+const updateLog = () => path.join(app.getPath("userData"), "update.log");
+
 export function createUpdater({ getWindow, log, settings, saveSettings }) {
   let busy = false;
   let pending = null; // the release the in-app "Update available" card is showing
   const send = (channel, payload) => { const w = getWindow(); if (w && !w.isDestroyed()) w.webContents.send(channel, payload); };
-  const card = () => pending && ({ version: pending.rel.version, current: app.getVersion(), notes: plainNotes(pending.rel.notes), canSkip: !pending.interactive });
+  const card = () => pending && ({ version: pending.rel.version, current: app.getVersion(), notes: plainNotes(pending.rel.notes), canSkip: !pending.interactive, failed: !!pending.failed, logPath: updateLog() });
 
   async function latest() {
     const res = await fetch(LATEST_URL, { headers: { accept: "application/vnd.github+json", "user-agent": "DevScope" }, signal: AbortSignal.timeout(15000) });
@@ -104,16 +106,24 @@ export function createUpdater({ getWindow, log, settings, saveSettings }) {
     // If the move fails the old bundle is restored, so the user is never left without an app.
     const script = path.join(work, "swap.sh");
     fs.writeFileSync(script, `#!/bin/sh
+OLD="$1"; NEW="$2"; LOG="$3"; BAK="$1.old-$$"
+exec >>"$LOG" 2>&1
+echo "--- $(date) swap ${rel.version}: $OLD <- $NEW"
 while kill -0 ${process.pid} 2>/dev/null; do sleep 0.3; done
-OLD="$1"; NEW="$2"; BAK="$1.old-$$"
-mv "$OLD" "$BAK" || exit 1
-if mv "$NEW" "$OLD"; then rm -rf "$BAK"; else mv "$BAK" "$OLD"; fi
-open "$OLD"
+if mv "$OLD" "$BAK"; then
+  if mv "$NEW" "$OLD"; then rm -rf "$BAK"; echo "swapped ok";
+  else echo "FAILED to move the new app into place; restoring"; rm -rf "$OLD"; mv "$BAK" "$OLD"; fi
+else
+  echo "FAILED to move the old app aside (permissions or App Management?)"
+fi
+# Always reopen something, so a failed swap never leaves the user with no app.
+open "$OLD" || echo "FAILED to reopen $OLD"
 rm -rf "${work}"
 `);
     fs.chmodSync(script, 0o755);
-    log(`[update] installing ${rel.version} into ${bundle} and relaunching`);
-    spawn("/bin/sh", [script, bundle, fresh], { detached: true, stdio: "ignore" }).unref();
+    settings.installing = { version: rel.version, from: app.getVersion() }; saveSettings();
+    log(`[update] installing ${rel.version} into ${bundle} and relaunching (log: ${updateLog()})`);
+    spawn("/bin/sh", [script, bundle, fresh, updateLog()], { detached: true, stdio: "ignore" }).unref();
     app.quit();
   }
 
@@ -125,14 +135,20 @@ rm -rf "${work}"
       const rel = await latest();
       const current = app.getVersion();
       if (!newer(rel.version, current)) {
+        if (settings.installing) { settings.installing = null; saveSettings(); }
         if (interactive) await dialog.showMessageBox(win, { type: "info", message: "DevScope is up to date", detail: `You have version ${current}, the latest release.` });
         return;
       }
-      if (!interactive && settings.skipVersion === rel.version) return;
+      // We installed this exact version last time and it is still older: the swap did not apply.
+      // Say so (and offer a manual download) instead of offering the same update forever.
+      const failed = settings.installing?.version === rel.version;
+      if (settings.installing && (!newer(rel.version, current) || failed)) { settings.installing = null; saveSettings(); }
+      if (!interactive && !failed && settings.skipVersion === rel.version) return;
+      if (!interactive && failed) { settings.skipVersion = rel.version; saveSettings(); }
       const auto = process.env.DEVSCOPE_UPDATE_AUTO === "1"; // tests: accept without a click
       if (auto) { await install(rel); return; }
       if (win && !win.isDestroyed()) { // centered in-app card with an "Update now" button
-        pending = { rel, interactive };
+        pending = { rel, interactive, failed };
         win.show(); win.focus();
         send("update:available", card());
         return;
@@ -157,6 +173,7 @@ rm -rf "${work}"
   ipcMain.handle("update:pending", () => card());
   ipcMain.handle("update:install", async () => {
     if (!pending) return;
+    if (pending.failed) { await shell.openExternal(pending.rel.page); return; }
     const { rel } = pending;
     try { await install(rel); send("update:close"); pending = null; }
     catch (e) { log(`[update] ${e.message}`); getWindow()?.setProgressBar(-1); send("update:error", e.message); }
